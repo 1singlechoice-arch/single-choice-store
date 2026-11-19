@@ -26,6 +26,8 @@ const __dirname = path.dirname(__filename);
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  'https://www.singlechoice.ng',
+  'https://singlechoice.ng',
   'https://single-choice-store.vercel.app',
   'https://choice-store.vercel.app',
   'http://localhost:5173',
@@ -710,7 +712,7 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
     const clientBase =
       rawClientUrl && !rawClientUrl.includes('choice-store.vercel.app')
         ? rawClientUrl
-        : 'https://single-choice-store.vercel.app';
+        : 'https://www.singlechoice.ng';
 
     const paystackRes = await axios.post(
       'https://api.paystack.co/transaction/initialize',
