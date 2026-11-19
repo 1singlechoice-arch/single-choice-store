@@ -713,82 +713,225 @@ export default function App() {
             )}
           </section>
         ) : activeView === 'contact' ? (
-          <section className="page-container contact-section">
-            <div className="contact-grid">
+          <section
+            className="page-container contact-section"
+            style={{
+              maxWidth: '1080px',
+              margin: '0 auto',
+              padding: '44px 20px 72px',
+            }}
+          >
+            <div
+              className="contact-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: '36px',
+                alignItems: 'start',
+              }}
+            >
               <div className="contact-info-panel">
                 <span className="eyebrow-gold">CLIENT CONCIERGE</span>
-                <h1 className="editorial-heading">At Your Service</h1>
-                <p className="editorial-copy">
+                <h1 className="editorial-heading" style={{ marginTop: '6px', marginBottom: '14px' }}>
+                  At Your Service
+                </h1>
+                <p
+                  className="editorial-copy"
+                  style={{
+                    color: 'var(--text-muted)',
+                    lineHeight: '1.65',
+                    fontSize: '15px',
+                    marginBottom: '28px',
+                  }}
+                >
                   Need styling advice, additional close-up videos of a piece, or urgent same-day
                   Lagos dispatch assistance? Reach out directly to our boutique concierge.
                 </p>
 
-                <div className="concierge-details">
-                  <div className="concierge-item">
-                    <MapPin size={18} />
-                    <div>
-                      <strong>Lagos Boutique &amp; Dispatch Hub</strong>
-                      <span>Victoria Island &amp; Lekki Dispatch Network, Lagos</span>
+                <div
+                  className="concierge-details"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '16px',
+                  }}
+                >
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <MapPin size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Lagos Boutique &amp; Dispatch Hub
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        Victoria Island &amp; Lekki Dispatch Network, Lagos
+                      </span>
                     </div>
                   </div>
-                  <div className="concierge-item">
-                    <Mail size={18} />
-                    <div>
-                      <strong>Direct Concierge Email</strong>
-                      <span>1singlechoice@gmail.com</span>
+
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <Mail size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Direct Concierge Email
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        1singlechoice@gmail.com
+                      </span>
                     </div>
                   </div>
-                  <div className="concierge-item">
-                    <Phone size={18} />
-                    <div>
-                      <strong>Dispatch Hours</strong>
-                      <span>Monday — Saturday, 9:00 AM — 7:00 PM WAT</span>
+
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <Phone size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Dispatch Hours
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        Monday — Saturday, 9:00 AM — 7:00 PM WAT
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <form className="contact-form-card" onSubmit={handleContactSubmit}>
-                <h3>Send a Message</h3>
-                <div className="form-group">
-                  <label>Full Name *</label>
+              <form
+                className="contact-form-card"
+                onSubmit={handleContactSubmit}
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '28px 24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                }}
+              >
+                <h3
+                  style={{
+                    fontFamily: 'var(--font-serif)',
+                    fontSize: '21px',
+                    color: 'var(--forest-green)',
+                    margin: '0 0 4px',
+                  }}
+                >
+                  Send a Message
+                </h3>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Full Name *
+                  </label>
                   <input
                     type="text"
                     required
                     value={contactForm.name}
                     onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
                     placeholder="Your full name"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Email Address *</label>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Email Address *
+                  </label>
                   <input
                     type="email"
                     required
                     value={contactForm.email}
                     onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
                     placeholder="you@example.com"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Phone / WhatsApp</label>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Phone / WhatsApp
+                  </label>
                   <input
                     type="tel"
                     value={contactForm.phone}
                     onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
                     placeholder="+234 800 000 0000"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Message *</label>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Message *
+                  </label>
                   <textarea
                     rows={4}
                     required
                     value={contactForm.message}
                     onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
                     placeholder="Tell us which handbag you are interested in..."
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                    }}
                   />
                 </div>
+
                 <button type="submit" className="btn-primary full-width" disabled={sendingContact}>
                   {sendingContact ? 'Sending Message...' : 'Send to Concierge'}
                 </button>
