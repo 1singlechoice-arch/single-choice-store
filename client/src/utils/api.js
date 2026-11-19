@@ -1,3 +1,13 @@
+function getBackendBaseUrl() {
+  const raw = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('localhost') || raw.startsWith('127.0.0.1')) {
+    return `http://${raw}`;
+  }
+  return `https://${raw}`;
+}
+
 export function resolveBagImage(imagePath, fallback = '') {
   if (!imagePath || typeof imagePath !== 'string') return fallback;
 
@@ -8,7 +18,7 @@ export function resolveBagImage(imagePath, fallback = '') {
     return trimmed;
   }
 
-  const backendBase = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const backendBase = getBackendBaseUrl();
   const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 
   return backendBase ? `${backendBase}${normalizedPath}` : normalizedPath;
@@ -27,9 +37,9 @@ export async function apiRequest(endpoint, options = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const backendBase = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const backendBase = getBackendBaseUrl();
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = endpoint.startsWith('http') ? endpoint : `${backendBase}${normalizedEndpoint}`;
+  const url = /^https?:\/\//i.test(endpoint) ? endpoint : `${backendBase}${normalizedEndpoint}`;
 
   const response = await fetch(url, {
     ...restOptions,
