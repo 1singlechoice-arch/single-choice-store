@@ -593,7 +593,9 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
     const validItems = user.cart.filter((i) => i.bag !== null);
     if (validItems.length === 0) return res.status(400).json({ message: 'Cart is empty.' });
 
-    const totalAmount = validItems.reduce((sum, i) => sum + i.bag.price * i.qty, 0);
+    const subtotal = validItems.reduce((sum, i) => sum + i.bag.price * i.qty, 0);
+    const deliveryFee = 0; // Rider fee is confirmed after order placement
+    const totalAmount = subtotal + deliveryFee;
     const reference = 'SC_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
 
     const createdOrder = await Order.create({
@@ -603,13 +605,19 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
         price: i.bag.price,
         qty: i.qty,
       })),
-      delivery: { area, streetAddress, phone },
+      delivery: {
+        area,
+        streetAddress,
+        phone,
+        fee: deliveryFee,
+      },
+      subtotal,
       totalAmount,
       paystackReference: reference,
     });
 
     await sendOrderEmails(createdOrder, user, 'placed');
-    res.json({ authorization_url: '#', reference, totalAmount });
+    res.json({ authorization_url: '#', reference, subtotal, deliveryFee, totalAmount });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
