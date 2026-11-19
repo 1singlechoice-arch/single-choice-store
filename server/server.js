@@ -8,7 +8,6 @@ import axios from 'axios';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -102,51 +101,68 @@ const signToken = (user) =>
     { expiresIn: '7d' }
   );
 
-const createMailTransporter = () => {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) return null;
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+const sendBrevoEmail = async ({ toEmail, toName, subject, textContent, htmlContent, replyTo }) => {
+  const apiKey = (process.env.BREVO_API_KEY || '').trim();
+  const senderEmail = (process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || '1singlechoice@gmail.com').trim();
+  const senderName = (process.env.BREVO_SENDER_NAME || 'Single Choice').trim();
+
+  if (!apiKey) {
+    console.warn('BREVO_API_KEY is not set; skipping email send.');
+    return null;
+  }
+
+  const payload = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: toEmail, name: toName || toEmail }],
+    subject,
+    ...(htmlContent && { htmlContent }),
+    ...(textContent && { textContent }),
+    ...(replyTo && { replyTo: { email: replyTo } }),
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'api-key': apiKey,
     },
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
+    body: JSON.stringify(payload),
   });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Brevo API error (${response.status}): ${errText}`);
+  }
+
+  return response.json();
 };
 
 const sendCustomerOtpEmail = async (email, name, otp) => {
-  const transporter = createMailTransporter();
-  if (transporter) {
-    setImmediate(() => {
-      transporter
-        .sendMail({
-          from: `"Single Choice" <${process.env.SMTP_USER}>`,
-          replyTo: process.env.SMTP_USER,
-          to: email,
-          subject: `${otp} is your Single Choice account code`,
-          text: `Hi ${name},\n\nYour account confirmation code is: ${otp}\n\nThis code is valid for 10 minutes.`,
-          html: `
-          <div style="font-family: Georgia, serif; max-width: 500px; margin: auto; padding: 28px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
-            <h2 style="color: #142B22; margin-top: 0;">Hi ${name},</h2>
-            <p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #444444;">
-              Please enter the confirmation code below to finish setting up your profile:
-            </p>
-            <div style="font-family: Arial, sans-serif; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #142B22; background: #FAF8F5; padding: 14px; text-align: center; margin: 20px 0; border: 1px solid #C5A059;">
-              ${otp}
-            </div>
+  setImmediate(() => {
+    sendBrevoEmail({
+      toEmail: email,
+      toName: name,
+      replyTo: process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || '1singlechoice@gmail.com',
+      subject: `${otp} is your Single Choice account code`,
+      textContent: `Hi ${name},\n\nYour account confirmation code is: ${otp}\n\nThis code is valid for 10 minutes.`,
+      htmlContent: `
+        <div style="font-family: Georgia, serif; max-width: 500px; margin: auto; padding: 28px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
+          <h2 style="color: #142B22; margin-top: 0;">Hi ${name},</h2>
+          <p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #444444;">
+            Please enter the confirmation code below to finish setting up your profile:
+          </p>
+          <div style="font-family: Arial, sans-serif; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #142B22; background: #FAF8F5; padding: 14px; text-align: center; margin: 20px 0; border: 1px solid #C5A059;">
+            ${otp}
           </div>
-        `,
-        })
-        .catch((err) => console.error('OTP email error:', err.message));
-    });
-  }
+        </div>
+      `,
+    }).catch((err) => console.error('OTP email error:', err.message));
+  });
 };
 
 const sendOrderEmails = async (order, customer, stage = 'placed') => {
-  const transporter = createMailTransporter();
-  const boutiqueEmail = '1singlechoice@gmail.com';
+  const boutiqueEmail = (process.env.CONCIERGE_TO_EMAIL || '1singlechoice@gmail.com').trim();
   const shortOrderId = order._id.toString().slice(-6).toUpperCase();
   const isPaid = stage === 'paid' || order.paymentStatus === 'paid';
   const statusLabel = isPaid ? 'PAYMENT CONFIRMED (PAID)' : 'NEW ORDER PLACED (AWAITING TRANSFER)';
@@ -160,18 +176,14 @@ const sendOrderEmails = async (order, customer, stage = 'placed') => {
     )
     .join('\n');
 
-  if (!transporter) return;
-
   setImmediate(() => {
-    transporter
-      .sendMail({
-        from: `"Single Choice Orders" <${process.env.SMTP_USER}>`,
-        replyTo: customer.email,
-        to: boutiqueEmail,
-        subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
-        text: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}\n\nItems:\n${itemsText}\n\nTotal: ₦${order.totalAmount.toLocaleString()}`,
-      })
-      .catch((err) => console.error('Admin order email error:', err.message));
+    sendBrevoEmail({
+      toEmail: boutiqueEmail,
+      toName: 'Single Choice Concierge',
+      replyTo: customer.email,
+      subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
+      textContent: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}\n\nItems:\n${itemsText}\n\nTotal: ₦${order.totalAmount.toLocaleString()}`,
+    }).catch((err) => console.error('Admin order email error:', err.message));
   });
 };
 
@@ -267,8 +279,37 @@ app.post('/api/contact', async (req, res) => {
     if (!name?.trim() || !email?.trim() || !message?.trim()) {
       return res.status(400).json({ message: 'Please enter your name, email, and message.' });
     }
+
+    const boutiqueEmail = (process.env.CONCIERGE_TO_EMAIL || '1singlechoice@gmail.com').trim();
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const cleanPhone = (phone || '').trim();
+    const cleanSubject = (subject || '').trim();
+    const cleanMessage = message.trim();
+
+    await sendBrevoEmail({
+      toEmail: boutiqueEmail,
+      toName: 'Single Choice Concierge',
+      replyTo: cleanEmail,
+      subject: cleanSubject
+        ? `[Concierge] ${cleanSubject} — ${cleanName}`
+        : `[Concierge Inquiry] From ${cleanName}`,
+      textContent: `Name: ${cleanName}\nEmail: ${cleanEmail}\nPhone / WhatsApp: ${cleanPhone || 'Not provided'}\n\nMessage:\n${cleanMessage}`,
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; max-width: 560px; margin: auto; padding: 24px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
+          <h2 style="color: #142B22; margin-top: 0;">New Client Concierge Message</h2>
+          <p><strong>Name:</strong> ${cleanName}</p>
+          <p><strong>Email:</strong> ${cleanEmail}</p>
+          <p><strong>Phone / WhatsApp:</strong> ${cleanPhone || 'Not provided'}</p>
+          <hr style="border: none; border-top: 1px solid #E8E2D9; margin: 16px 0;" />
+          <p style="white-space: pre-line; line-height: 1.6;">${cleanMessage}</p>
+        </div>
+      `,
+    });
+
     res.json({ message: 'Thank you for reaching out! Our concierge team has received your message.' });
   } catch (err) {
+    console.error('Contact email error:', err.message);
     res.status(500).json({ message: 'Unable to send message right now.' });
   }
 });
@@ -487,19 +528,14 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    const transporter = createMailTransporter();
-    if (transporter) {
-      setImmediate(() => {
-        transporter
-          .sendMail({
-            from: `"Single Choice" <${process.env.SMTP_USER}>`,
-            to: normalizedEmail,
-            subject: `${otp} is your Single Choice password reset code`,
-            text: `Your password reset code is: ${otp}. Valid for 10 minutes.`,
-          })
-          .catch(() => {});
-      });
-    }
+    setImmediate(() => {
+      sendBrevoEmail({
+        toEmail: normalizedEmail,
+        toName: user.name,
+        subject: `${otp} is your Single Choice password reset code`,
+        textContent: `Your password reset code is: ${otp}. Valid for 10 minutes.`,
+      }).catch((err) => console.error('Password reset email error:', err.message));
+    });
 
     res.json({ email: normalizedEmail, message: '6-digit password reset code sent to your email.' });
   } catch (err) {
