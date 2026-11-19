@@ -28,17 +28,22 @@ const __dirname = path.dirname(__filename);
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  'https://single-choice-store.vercel.app',
+  'https://choice-store.vercel.app',
   'http://localhost:5173',
-].filter(Boolean);
+]
+  .filter(Boolean)
+  .map((url) => url.trim().replace(/\/+$/, ''));
 
 app.use(
   cors({
     origin(origin, callback) {
       // Allow non-browser requests (like curl/health checks) or allowlisted origins
-      if (!origin || allowedOrigins.includes(origin)) {
+      const normalizedOrigin = origin ? origin.trim().replace(/\/+$/, '') : '';
+      if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
-      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+      return callback(null, false);
     },
     credentials: true,
   })
