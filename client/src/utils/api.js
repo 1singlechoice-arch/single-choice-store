@@ -1,3 +1,19 @@
+export function resolveBagImage(imagePath, fallback = '') {
+  if (!imagePath || typeof imagePath !== 'string') return fallback;
+
+  const trimmed = imagePath.trim();
+  if (!trimmed) return fallback;
+
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  const backendBase = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+
+  return backendBase ? `${backendBase}${normalizedPath}` : normalizedPath;
+}
+
 export async function apiRequest(endpoint, options = {}) {
   const { token: explicitToken, headers: customHeaders, body, ...restOptions } = options;
   const token = explicitToken || localStorage.getItem('sc_token') || '';
