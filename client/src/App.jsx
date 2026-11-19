@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Menu,
   X,
@@ -73,10 +73,10 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
 
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
-  };
+  }, []);
 
   const loadBags = async () => {
     try {
@@ -108,7 +108,7 @@ export default function App() {
     }
   };
 
-  const loadCart = async (activeToken = token) => {
+  const loadCart = useCallback(async (activeToken = token) => {
     const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
     if (!resolvedToken) {
       setCart([]);
@@ -120,9 +120,9 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [token]);
 
-  const loadOrders = async (activeToken = token) => {
+  const loadOrders = useCallback(async (activeToken = token) => {
     const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
     if (!resolvedToken) return;
     try {
@@ -134,7 +134,7 @@ export default function App() {
     } finally {
       setLoadingOrders(false);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     loadBags();
@@ -184,7 +184,35 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, loadCart, loadOrders]);
+
+  useEffect(() => {
+    const activeToken = token || localStorage.getItem('sc_token') || '';
+    const params = new URLSearchParams(window.location.search);
+    const paymentRef = params.get('reference') || params.get('trxref');
+    if (!paymentRef || !activeToken) return;
+
+    let cancelled = false;
+    apiRequest(`/api/checkout/verify/${encodeURIComponent(paymentRef)}`, { token: activeToken })
+      .then(() => {
+        if (cancelled) return;
+        window.history.replaceState({}, document.title, window.location.pathname);
+        showToast('Payment confirmed! Your order is now being processed.');
+        loadCart(activeToken);
+        loadOrders(activeToken);
+        setActiveView('orders');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Payment verification error:', err);
+        loadOrders(activeToken);
+        setActiveView('orders');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, loadCart, loadOrders, showToast]);
 
   const handleLogout = () => {
     localStorage.removeItem('sc_token');
@@ -280,7 +308,7 @@ export default function App() {
     if (cart.length === 0) return;
     setCheckingOut(true);
     try {
-      await apiRequest('/api/checkout/initialize', {
+      const data = await apiRequest('/api/checkout/initialize', {
         token,
         method: 'POST',
         body: JSON.stringify({
@@ -289,6 +317,13 @@ export default function App() {
           phone: deliveryPhone.trim(),
         }),
       });
+
+      if (data?.authorization_url && /^https?:\/\//i.test(data.authorization_url)) {
+        setCartOpen(false);
+        setCheckoutOpen(false);
+        window.location.assign(data.authorization_url);
+        return;
+      }
 
       showToast('Order placed successfully! Awaiting bank transfer confirmation.');
       setCartOpen(false);
@@ -1262,7 +1297,7 @@ export default function App() {
 
                 <h4>Lagos Dispatch Details</h4>
                 <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                  Complete your handbag payment via instant Bank Transfer. Our team will send your
+                  Complete your handbag payment securely via Paystack. Our team will send your
                   exact rider fee &amp; pickup code after.
                 </p>
 
@@ -1343,8 +1378,8 @@ export default function App() {
 
                 <button type="submit" className="btn-primary full-width" disabled={checkingOut}>
                   {checkingOut
-                    ? 'Processing Order...'
-                    : `Pay ₦${cartSubtotal.toLocaleString()} via Bank Transfer`}
+                    ? 'Redirecting to Paystack...'
+                    : `Proceed to Paystack — ₦${cartSubtotal.toLocaleString()}`}
                 </button>
               </form>
             ) : (
