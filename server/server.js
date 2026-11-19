@@ -2,7 +2,6 @@ import express from 'express';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import axios from 'axios';
@@ -121,13 +120,14 @@ const sendCustomerOtpEmail = async (email, name, otp) => {
   const transporter = createMailTransporter();
   if (transporter) {
     setImmediate(() => {
-      transporter.sendMail({
-        from: `"Single Choice" <${process.env.SMTP_USER}>`,
-        replyTo: process.env.SMTP_USER,
-        to: email,
-        subject: `${otp} is your Single Choice account code`,
-        text: `Hi ${name},\n\nYour account confirmation code is: ${otp}\n\nThis code is valid for 10 minutes.`,
-        html: `
+      transporter
+        .sendMail({
+          from: `"Single Choice" <${process.env.SMTP_USER}>`,
+          replyTo: process.env.SMTP_USER,
+          to: email,
+          subject: `${otp} is your Single Choice account code`,
+          text: `Hi ${name},\n\nYour account confirmation code is: ${otp}\n\nThis code is valid for 10 minutes.`,
+          html: `
           <div style="font-family: Georgia, serif; max-width: 500px; margin: auto; padding: 28px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
             <h2 style="color: #142B22; margin-top: 0;">Hi ${name},</h2>
             <p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #444444;">
@@ -138,7 +138,8 @@ const sendCustomerOtpEmail = async (email, name, otp) => {
             </div>
           </div>
         `,
-      }).catch(err => console.error('OTP email error:', err.message));
+        })
+        .catch((err) => console.error('OTP email error:', err.message));
     });
   }
 };
@@ -162,13 +163,15 @@ const sendOrderEmails = async (order, customer, stage = 'placed') => {
   if (!transporter) return;
 
   setImmediate(() => {
-    transporter.sendMail({
-      from: `"Single Choice Orders" <${process.env.SMTP_USER}>`,
-      replyTo: customer.email,
-      to: boutiqueEmail,
-      subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
-      text: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}\n\nItems:\n${itemsText}\n\nTotal: ₦${order.totalAmount.toLocaleString()}`,
-    }).catch(err => console.error('Admin order email error:', err.message));
+    transporter
+      .sendMail({
+        from: `"Single Choice Orders" <${process.env.SMTP_USER}>`,
+        replyTo: customer.email,
+        to: boutiqueEmail,
+        subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
+        text: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}\n\nItems:\n${itemsText}\n\nTotal: ₦${order.totalAmount.toLocaleString()}`,
+      })
+      .catch((err) => console.error('Admin order email error:', err.message));
   });
 };
 
@@ -241,7 +244,8 @@ const seedInitialData = async () => {
       key: 'storefront',
       heroEyebrow: 'SINGLE CHOICE • CAMPAIGN 2026',
       heroTitle: 'The Art of Carrying',
-      heroSubtitle: 'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
+      heroSubtitle:
+        'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
       heroCtaText: 'Discover the Collection',
     });
   }
@@ -278,7 +282,8 @@ app.get('/api/settings', async (req, res) => {
       heroVideo: '',
       heroEyebrow: 'SINGLE CHOICE • CAMPAIGN 2026',
       heroTitle: 'The Art of Carrying',
-      heroSubtitle: 'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
+      heroSubtitle:
+        'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
       heroCtaText: 'Discover the Collection',
     }
   );
@@ -321,29 +326,39 @@ app.post('/api/admin/settings/hero', protect, adminOnly, upload.single('heroFile
   }
 });
 
-app.post('/api/admin/settings/video', protect, adminOnly, uploadVideo.single('heroVideoFile'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ message: 'Please select a campaign video.' });
-    const existing = await Settings.findOne({ key: 'storefront' });
-    const oldPublicId = extractCloudinaryPublicId(existing?.heroVideo);
-    if (oldPublicId) await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
+app.post(
+  '/api/admin/settings/video',
+  protect,
+  adminOnly,
+  uploadVideo.single('heroVideoFile'),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: 'Please select a campaign video.' });
+      const existing = await Settings.findOne({ key: 'storefront' });
+      const oldPublicId = extractCloudinaryPublicId(existing?.heroVideo);
+      if (oldPublicId) {
+        await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
+      }
 
-    const updated = await Settings.findOneAndUpdate(
-      { key: 'storefront' },
-      { heroVideo: req.file.path },
-      { new: true, upsert: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
+      const updated = await Settings.findOneAndUpdate(
+        { key: 'storefront' },
+        { heroVideo: req.file.path },
+        { new: true, upsert: true }
+      );
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
   }
-});
+);
 
 app.delete('/api/admin/settings/video', protect, adminOnly, async (req, res) => {
   try {
     const existing = await Settings.findOne({ key: 'storefront' });
     const oldPublicId = extractCloudinaryPublicId(existing?.heroVideo);
-    if (oldPublicId) await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
+    if (oldPublicId) {
+      await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
+    }
 
     const updated = await Settings.findOneAndUpdate(
       { key: 'storefront' },
@@ -405,7 +420,10 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     if (!user) return res.status(404).json({ message: 'Account not found.' });
 
     if (user.isVerified) {
-      return res.json({ token: signToken(user), user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+      return res.json({
+        token: signToken(user),
+        user: { id: user._id, name: user.name, email: user.email, role: user.role },
+      });
     }
 
     if (!user.otpCode || user.otpCode !== otp.trim()) {
@@ -421,7 +439,10 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     user.otpExpires = null;
     await user.save();
 
-    res.json({ token: signToken(user), user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+    res.json({
+      token: signToken(user),
+      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -434,7 +455,10 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(400).json({ message: 'Invalid email or password.' });
     }
-    res.json({ token: signToken(user), user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+    res.json({
+      token: signToken(user),
+      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -466,12 +490,14 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     const transporter = createMailTransporter();
     if (transporter) {
       setImmediate(() => {
-        transporter.sendMail({
-          from: `"Single Choice" <${process.env.SMTP_USER}>`,
-          to: normalizedEmail,
-          subject: `${otp} is your Single Choice password reset code`,
-          text: `Your password reset code is: ${otp}. Valid for 10 minutes.`,
-        }).catch(() => {});
+        transporter
+          .sendMail({
+            from: `"Single Choice" <${process.env.SMTP_USER}>`,
+            to: normalizedEmail,
+            subject: `${otp} is your Single Choice password reset code`,
+            text: `Your password reset code is: ${otp}. Valid for 10 minutes.`,
+          })
+          .catch(() => {});
       });
     }
 
@@ -503,7 +529,11 @@ app.post('/api/auth/reset-password', async (req, res) => {
     user.isVerified = true;
     await user.save();
 
-    res.json({ token: signToken(user), user: { id: user._id, name: user.name, email: user.email, role: user.role }, message: 'Password updated successfully.' });
+    res.json({
+      token: signToken(user),
+      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+      message: 'Password updated successfully.',
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -538,7 +568,9 @@ app.post('/api/bags', protect, staffOnly, upload.any(), async (req, res) => {
   try {
     const { name, category, price, stock, description, colorName, colorHex } = req.body;
     const primaryFiles = (req.files || []).filter((f) => f.fieldname === 'imageFiles');
-    if (primaryFiles.length === 0) return res.status(400).json({ message: 'Please select at least 1 photo.' });
+    if (primaryFiles.length === 0) {
+      return res.status(400).json({ message: 'Please select at least 1 photo.' });
+    }
 
     const primaryImageUrls = primaryFiles.map((f) => f.path);
     const bag = await Bag.create({
@@ -638,9 +670,11 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
       return res.json({ authorization_url: '#', reference, subtotal, deliveryFee, totalAmount });
     }
 
-    const clientBase = (process.env.CLIENT_URL || 'https://choice-store.vercel.app')
-      .trim()
-      .replace(/\/+$/, '');
+    const rawClientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/+$/, '');
+    const clientBase =
+      rawClientUrl && !rawClientUrl.includes('choice-store.vercel.app')
+        ? rawClientUrl
+        : 'https://single-choice-store.vercel.app';
 
     const paystackRes = await axios.post(
       'https://api.paystack.co/transaction/initialize',
@@ -672,8 +706,33 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
 });
 
 app.get('/api/checkout/verify/:reference', protect, async (req, res) => {
-  await fulfillPaidOrder(req.params.reference);
-  res.json({ status: 'paid', message: 'Order confirmed successfully.' });
+  try {
+    const reference = req.params.reference;
+    const existingOrder = await Order.findOne({ paystackReference: reference });
+    if (!existingOrder) {
+      return res.status(404).json({ message: 'Order not found for reference.' });
+    }
+
+    if (process.env.PAYSTACK_SECRET_KEY) {
+      const verifyRes = await axios.get(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          },
+        }
+      );
+      const txStatus = verifyRes.data?.data?.status;
+      if (txStatus !== 'success') {
+        return res.status(400).json({ status: txStatus || 'pending', message: 'Payment not completed yet.' });
+      }
+    }
+
+    await fulfillPaidOrder(reference);
+    res.json({ status: 'paid', message: 'Order confirmed successfully.' });
+  } catch (err) {
+    res.status(500).json({ message: err.response?.data?.message || err.message });
+  }
 });
 
 app.get('/api/orders/my', protect, async (req, res) => {
