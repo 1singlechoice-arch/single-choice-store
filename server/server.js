@@ -17,6 +17,7 @@ import Collection from './models/Collection.js';
 import Order from './models/Order.js';
 import Settings from './models/Settings.js';
 import { protect, adminOnly, staffOnly } from './middleware/auth.js';
+import { customerOnly } from './middleware/customerOnly.js';
 
 dotenv.config();
 const app = express();
@@ -634,12 +635,12 @@ app.delete('/api/bags/:id', protect, adminOnly, async (req, res) => {
   res.json({ message: 'Bag deleted.' });
 });
 
-app.get('/api/cart', protect, async (req, res) => {
+app.get('/api/cart', protect, customerOnly, async (req, res) => {
   const user = await User.findById(req.user._id).populate('cart.bag');
   res.json(user.cart.filter((item) => item.bag !== null));
 });
 
-app.post('/api/cart', protect, async (req, res) => {
+app.post('/api/cart', protect, customerOnly, async (req, res) => {
   const { bagId, qty = 1, selectedColor } = req.body;
   const bag = await Bag.findById(bagId);
   if (!bag) return res.status(404).json({ message: 'Bag not found.' });
@@ -661,7 +662,7 @@ app.post('/api/cart', protect, async (req, res) => {
   res.json(updated.cart.filter((item) => item.bag !== null));
 });
 
-app.delete('/api/cart/:bagId', protect, async (req, res) => {
+app.delete('/api/cart/:bagId', protect, customerOnly, async (req, res) => {
   const { color } = req.query;
   const user = await User.findById(req.user._id);
   user.cart = user.cart.filter(
@@ -672,7 +673,7 @@ app.delete('/api/cart/:bagId', protect, async (req, res) => {
   res.json(updated.cart.filter((item) => item.bag !== null));
 });
 
-app.post('/api/checkout/initialize', protect, async (req, res) => {
+app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => {
   try {
     const { area, streetAddress, phone } = req.body;
     const user = await User.findById(req.user._id).populate('cart.bag');
@@ -743,7 +744,7 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
   }
 });
 
-app.get('/api/checkout/verify/:reference', protect, async (req, res) => {
+app.get('/api/checkout/verify/:reference', protect, customerOnly, async (req, res) => {
   try {
     const reference = req.params.reference;
     const existingOrder = await Order.findOne({ paystackReference: reference });

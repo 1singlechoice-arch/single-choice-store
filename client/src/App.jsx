@@ -34,6 +34,8 @@ const LAGOS_AREAS = [
   'Mainland (Other)',
 ];
 
+const isStaffRole = (role) => role === 'admin' || role === 'staff';
+
 export default function App() {
   const [bags, setBags] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -108,33 +110,41 @@ export default function App() {
     }
   };
 
-  const loadCart = useCallback(async (activeToken = token) => {
-    const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
-    if (!resolvedToken) {
-      setCart([]);
-      return;
-    }
-    try {
-      const data = await apiRequest('/api/cart', { token: resolvedToken });
-      setCart(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-    }
-  }, [token]);
+  const loadCart = useCallback(
+    async (activeToken = token, role = user?.role) => {
+      const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
+      if (!resolvedToken || isStaffRole(role)) {
+        setCart([]);
+        return;
+      }
+      try {
+        const data = await apiRequest('/api/cart', { token: resolvedToken });
+        setCart(Array.isArray(data) ? data : []);
+      } catch (err) {
+        if (err?.status !== 403) {
+          console.error(err);
+        }
+      }
+    },
+    [token, user?.role]
+  );
 
-  const loadOrders = useCallback(async (activeToken = token) => {
-    const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
-    if (!resolvedToken) return;
-    try {
-      setLoadingOrders(true);
-      const data = await apiRequest('/api/orders/my', { token: resolvedToken });
-      setOrders(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingOrders(false);
-    }
-  }, [token]);
+  const loadOrders = useCallback(
+    async (activeToken = token) => {
+      const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
+      if (!resolvedToken) return;
+      try {
+        setLoadingOrders(true);
+        const data = await apiRequest('/api/orders/my', { token: resolvedToken });
+        setOrders(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoadingOrders(false);
+      }
+    },
+    [token]
+  );
 
   useEffect(() => {
     loadBags();
@@ -160,6 +170,14 @@ export default function App() {
         const resolvedUser = res?.user || res;
         if (resolvedUser && (resolvedUser._id || resolvedUser.id || resolvedUser.email)) {
           setUser(resolvedUser);
+          if (isStaffRole(resolvedUser.role)) {
+            setCart([]);
+            setCartOpen(false);
+            setCheckoutOpen(false);
+          } else {
+            loadCart(activeToken, resolvedUser.role);
+          }
+          loadOrders(activeToken);
         }
       })
       .catch((err) => {
@@ -168,6 +186,7 @@ export default function App() {
           localStorage.removeItem('sc_token');
           setToken('');
           setUser(null);
+          setCart([]);
         } else {
           console.warn('Auth check did not return 401; preserving session:', err);
         }
@@ -178,9 +197,6 @@ export default function App() {
         }
       });
 
-    loadCart(activeToken);
-    loadOrders(activeToken);
-
     return () => {
       cancelled = true;
     };
@@ -190,7 +206,7 @@ export default function App() {
     const activeToken = token || localStorage.getItem('sc_token') || '';
     const params = new URLSearchParams(window.location.search);
     const paymentRef = params.get('reference') || params.get('trxref');
-    if (!paymentRef || !activeToken) return;
+    if (!paymentRef || !activeToken || isStaffRole(user?.role)) return;
 
     let cancelled = false;
     apiRequest(`/api/checkout/verify/${encodeURIComponent(paymentRef)}`, { token: activeToken })
@@ -198,7 +214,7 @@ export default function App() {
         if (cancelled) return;
         window.history.replaceState({}, document.title, window.location.pathname);
         showToast('Payment confirmed! Your order is now being processed.');
-        loadCart(activeToken);
+        loadCart(activeToken, user?.role);
         loadOrders(activeToken);
         setActiveView('orders');
       })
@@ -212,13 +228,15 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [token, loadCart, loadOrders, showToast]);
+  }, [token, user?.role, loadCart, loadOrders, showToast]);
 
   const handleLogout = () => {
     localStorage.removeItem('sc_token');
     setToken('');
     setUser(null);
     setCart([]);
+    setCartOpen(false);
+    setCheckoutOpen(false);
     setActiveView('storefront');
     setMobileMenuOpen(false);
     showToast('Signed out successfully.');
@@ -235,7 +253,14 @@ export default function App() {
     setAuthChecking(false);
     setAuthModalOpen(false);
     showToast(`Welcome back, ${nextUser.name.split(' ')[0]}!`);
-    loadCart(nextToken);
+
+    if (isStaffRole(nextUser.role)) {
+      setCart([]);
+      setCartOpen(false);
+      setCheckoutOpen(false);
+    } else {
+      loadCart(nextToken, nextUser.role);
+    }
     loadOrders(nextToken);
   };
 
@@ -268,6 +293,11 @@ export default function App() {
   };
 
   const handleAddToBag = async (bag, color, qtyDelta = 1) => {
+    if (isStaffRole(user?.role)) {
+      showToast('Staff and admin accounts cannot purchase items.', 'error');
+      return;
+    }
+
     const colorToUse = color || bag.colorName || 'Classic';
     const activeToken = token || localStorage.getItem('sc_token') || '';
     if (!activeToken) {
@@ -282,7 +312,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({ bagId: bag._id, qty: qtyDelta, selectedColor: colorToUse }),
       });
-      setCart(updatedCart);
+      setCart(Array.isArray(updatedCart) ? updatedCart : []);
       showToast(`Added ${bag.name} (${colorToUse}) to bag.`);
     } catch (err) {
       showToast(err.message || 'Could not update bag.', 'error');
@@ -290,13 +320,14 @@ export default function App() {
   };
 
   const handleRemoveFromCart = async (bagId, color) => {
+    if (isStaffRole(user?.role)) return;
     try {
       const query = color ? `?color=${encodeURIComponent(color)}` : '';
       const updatedCart = await apiRequest(`/api/cart/${bagId}${query}`, {
         token,
         method: 'DELETE',
       });
-      setCart(updatedCart);
+      setCart(Array.isArray(updatedCart) ? updatedCart : []);
       showToast('Removed item from shopping bag.');
     } catch (err) {
       showToast('Could not remove item.', 'error');
@@ -305,6 +336,10 @@ export default function App() {
 
   const handleInitializeCheckout = async (e) => {
     e.preventDefault();
+    if (isStaffRole(user?.role)) {
+      showToast('Staff and admin accounts cannot place orders.', 'error');
+      return;
+    }
     if (cart.length === 0) return;
     setCheckingOut(true);
     try {
@@ -328,8 +363,8 @@ export default function App() {
       showToast('Order placed successfully! Awaiting bank transfer confirmation.');
       setCartOpen(false);
       setCheckoutOpen(false);
-      loadCart();
-      loadOrders();
+      loadCart(token, user?.role);
+      loadOrders(token);
       navigateToPage('orders');
     } catch (err) {
       showToast(err.message || 'Could not initialize checkout.', 'error');
@@ -366,9 +401,9 @@ export default function App() {
     return matchesCol && matchesSearch;
   });
 
-  const totalCartItems = cart.reduce((sum, item) => sum + item.qty, 0);
-  const cartSubtotal = cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
-  const isStaff = user && (user.role === 'admin' || user.role === 'staff');
+  const isStaff = Boolean(user && isStaffRole(user.role));
+  const totalCartItems = isStaff ? 0 : cart.reduce((sum, item) => sum + item.qty, 0);
+  const cartSubtotal = isStaff ? 0 : cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
 
   const activeBagPresentation = selectedBag
     ? {
@@ -478,15 +513,17 @@ export default function App() {
             </button>
           ) : null}
 
-          <button
-            type="button"
-            className="icon-btn bag-badge-btn"
-            onClick={() => setCartOpen(true)}
-            aria-label="Open shopping bag"
-          >
-            <ShoppingBag size={20} />
-            {totalCartItems > 0 && <span className="bag-badge-count">{totalCartItems}</span>}
-          </button>
+          {!isStaff && (
+            <button
+              type="button"
+              className="icon-btn bag-badge-btn"
+              onClick={() => setCartOpen(true)}
+              aria-label="Open shopping bag"
+            >
+              <ShoppingBag size={20} />
+              {totalCartItems > 0 && <span className="bag-badge-count">{totalCartItems}</span>}
+            </button>
+          )}
         </div>
       </header>
 
@@ -534,7 +571,9 @@ export default function App() {
               ))}
 
               <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '12px 0' }} />
-              <div className="drawer-section-label" style={{ fontSize: '10.5px', letterSpacing: '0.16em', color: 'var(--champagne-gold)', fontWeight: '700', margin: '8px 0 4px' }}>CONCIERGE &amp; ACCOUNT</div>
+              <div className="drawer-section-label" style={{ fontSize: '10.5px', letterSpacing: '0.16em', color: 'var(--champagne-gold)', fontWeight: '700', margin: '8px 0 4px' }}>
+                CONCIERGE &amp; ACCOUNT
+              </div>
 
               {isStaff && (
                 <button
@@ -1251,28 +1290,30 @@ export default function App() {
                   <p className="product-modal-desc">{selectedBag.description}</p>
                 )}
 
-                <div className="qty-selector-block">
-                  <span style={{ fontSize: '13px', fontWeight: '600' }}>Quantity:</span>
-                  <div className="qty-inline-controls">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedQty((q) => Math.max(1, q - 1))}
-                    >
-                      <Minus size={14} />
-                    </button>
-                    <span style={{ fontWeight: '700', minWidth: '20px', textAlign: 'center' }}>
-                      {selectedQty}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSelectedQty((q) => Math.min(activeBagPresentation.stock || 1, q + 1))
-                      }
-                    >
-                      <Plus size={14} />
-                    </button>
+                {!isStaff && (
+                  <div className="qty-selector-block">
+                    <span style={{ fontSize: '13px', fontWeight: '600' }}>Quantity:</span>
+                    <div className="qty-inline-controls">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQty((q) => Math.max(1, q - 1))}
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <span style={{ fontWeight: '700', minWidth: '20px', textAlign: 'center' }}>
+                        {selectedQty}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedQty((q) => Math.min(activeBagPresentation.stock || 1, q + 1))
+                        }
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="stock-status-line">
                   {activeBagPresentation.stock > 0 ? (
@@ -1286,16 +1327,31 @@ export default function App() {
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  className="btn-primary full-width"
-                  disabled={activeBagPresentation.stock <= 0}
-                  onClick={() => handleAddToBag(selectedBag, selectedColor, selectedQty)}
-                >
-                  {activeBagPresentation.stock > 0
-                    ? `Add to Shopping Bag — ₦${(Number(selectedBag.price) * selectedQty).toLocaleString()}`
-                    : 'Sold Out'}
-                </button>
+                {isStaff ? (
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '13px',
+                      color: 'var(--text-muted)',
+                      textAlign: 'center',
+                    }}
+                  >
+                    Staff &amp; admin accounts cannot purchase items.
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary full-width"
+                    disabled={activeBagPresentation.stock <= 0}
+                    onClick={() => handleAddToBag(selectedBag, selectedColor, selectedQty)}
+                  >
+                    {activeBagPresentation.stock > 0
+                      ? `Add to Shopping Bag — ₦${(Number(selectedBag.price) * selectedQty).toLocaleString()}`
+                      : 'Sold Out'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1303,7 +1359,7 @@ export default function App() {
       )}
 
       {/* SHOPPING CART / CHECKOUT DRAWER */}
-      {cartOpen && (
+      {cartOpen && !isStaff && (
         <div
           className="drawer-backdrop"
           style={{ zIndex: 3000 }}
