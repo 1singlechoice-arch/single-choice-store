@@ -13,6 +13,237 @@ function createEmptySlots() {
   }));
 }
 
+function hydrateSlotsFromUrls(urls = []) {
+  const uniqueUrls = (Array.isArray(urls) ? urls : [])
+    .filter(Boolean)
+    .filter((val, idx, arr) => arr.indexOf(val) === idx)
+    .slice(0, MAX_PHOTO_SLOTS);
+
+  const slots = createEmptySlots();
+  uniqueUrls.forEach((url, idx) => {
+    slots[idx] = {
+      existingUrl: url,
+      file: null,
+      previewUrl: '',
+    };
+  });
+  return slots;
+}
+
+function createEmptyVariant() {
+  return {
+    colorName: '',
+    colorHex: '#6E2639',
+    stock: '1',
+    photoSlots: createEmptySlots(),
+  };
+}
+
+function collectSlotsObjectUrls(slots = []) {
+  return slots.map((s) => s.previewUrl).filter(Boolean);
+}
+
+function collectAllPreviewUrls(primarySlots = [], variantList = []) {
+  const urls = [...collectSlotsObjectUrls(primarySlots)];
+  variantList.forEach((v) => {
+    urls.push(...collectSlotsObjectUrls(v.photoSlots || []));
+  });
+  return urls;
+}
+
+function revokeUrlList(urls = []) {
+  urls.forEach((url) => {
+    if (url) {
+      URL.revokeObjectURL(url);
+    }
+  });
+}
+
+function extractOrderedSlotData(slots = []) {
+  const activeSlots = slots.filter((s) => Boolean(s.file || s.existingUrl));
+  const files = activeSlots.map((s) => s.file).filter(Boolean);
+  const existingImages = activeSlots.map((s) => s.existingUrl).filter(Boolean);
+  const photoOrder = activeSlots.map((slot, idx) => ({
+    position: idx + 1,
+    source: slot.file ? 'upload' : 'existing',
+    url: slot.existingUrl || '',
+    fileName: slot.file ? slot.file.name : '',
+  }));
+  const coverPreview = activeSlots[0]
+    ? activeSlots[0].previewUrl || resolveBagImage(activeSlots[0].existingUrl)
+    : '';
+
+  return {
+    activeSlots,
+    files,
+    existingImages,
+    photoOrder,
+    coverPreview,
+  };
+}
+
+function SlotPhotoGrid({
+  slots,
+  inputRefsMap,
+  keyPrefix,
+  onSelectFile,
+  onSwap,
+  onClear,
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {slots.map((slot, slotIdx) => {
+        const displaySrc = slot.previewUrl
+          ? slot.previewUrl
+          : slot.existingUrl
+          ? resolveBagImage(slot.existingUrl)
+          : '';
+        const refKey = `${keyPrefix}_${slotIdx}`;
+
+        return (
+          <div
+            key={refKey}
+            style={{
+              border: '1px solid var(--border-subtle)',
+              background: '#fff',
+              padding: '8px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  minWidth: '72px',
+                  color: 'var(--forest-green)',
+                }}
+              >
+                {SLOT_LABELS[slotIdx]}
+              </span>
+
+              {displaySrc ? (
+                <img
+                  src={displaySrc}
+                  alt={`${SLOT_LABELS[slotIdx]} photo`}
+                  style={{
+                    width: '38px',
+                    height: '44px',
+                    objectFit: 'cover',
+                    border: '1px solid var(--border-subtle)',
+                    flexShrink: 0,
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: '38px',
+                    height: '44px',
+                    border: '1px dashed var(--border-subtle)',
+                    background: 'var(--bg-alabaster)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '11px',
+                    color: 'var(--text-muted)',
+                    flexShrink: 0,
+                  }}
+                >
+                  #{slotIdx + 1}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
+                <input
+                  ref={(el) => {
+                    if (inputRefsMap?.current) {
+                      inputRefsMap.current[refKey] = el;
+                    }
+                  }}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    if (picked) {
+                      onSelectFile(slotIdx, picked);
+                    }
+                  }}
+                  style={{ fontSize: '11px', maxWidth: '100%' }}
+                />
+                {slot.file && (
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--text-muted)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {slot.file.name}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+              <button
+                type="button"
+                disabled={slotIdx === 0}
+                onClick={() => onSwap(slotIdx, slotIdx - 1)}
+                title="Move up"
+                style={{
+                  background: 'var(--bg-alabaster)',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '4px',
+                  cursor: slotIdx === 0 ? 'not-allowed' : 'pointer',
+                  opacity: slotIdx === 0 ? 0.4 : 1,
+                }}
+              >
+                <ArrowUp size={13} />
+              </button>
+              <button
+                type="button"
+                disabled={slotIdx === MAX_PHOTO_SLOTS - 1}
+                onClick={() => onSwap(slotIdx, slotIdx + 1)}
+                title="Move down"
+                style={{
+                  background: 'var(--bg-alabaster)',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '4px',
+                  cursor: slotIdx === MAX_PHOTO_SLOTS - 1 ? 'not-allowed' : 'pointer',
+                  opacity: slotIdx === MAX_PHOTO_SLOTS - 1 ? 0.4 : 1,
+                }}
+              >
+                <ArrowDown size={13} />
+              </button>
+              {(slot.file || slot.existingUrl) && (
+                <button
+                  type="button"
+                  onClick={() => onClear(slotIdx)}
+                  title="Clear slot"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--danger)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function StaffPortal({
   user,
   bags = [],
@@ -47,7 +278,7 @@ export default function StaffPortal({
   const [variants, setVariants] = useState([]);
   const [submittingBag, setSubmittingBag] = useState(false);
 
-  const slotInputRefs = useRef([]);
+  const slotInputRefs = useRef({});
 
   // New Collection State
   const [newColName, setNewColName] = useState('');
@@ -86,29 +317,32 @@ export default function StaffPortal({
     setCtaInput(heroCtaText || '');
   }, [heroCtaText]);
 
-  const clearObjectUrls = (slots) => {
-    slots.forEach((slot) => {
-      if (slot.previewUrl) {
-        URL.revokeObjectURL(slot.previewUrl);
-      }
-    });
-  };
+  const previewUrlsRef = useRef([]);
+  useEffect(() => {
+    previewUrlsRef.current = collectAllPreviewUrls(photoSlots, variants);
+  }, [photoSlots, variants]);
 
   useEffect(() => {
     return () => {
-      clearObjectUrls(photoSlots);
+      revokeUrlList(previewUrlsRef.current);
     };
-  }, [photoSlots]);
+  }, []);
 
-  const resetSlotFileInput = (slotIdx) => {
-    const inputEl = slotInputRefs.current[slotIdx];
-    if (inputEl) {
-      inputEl.value = '';
+  const resetFileInputByKey = (key) => {
+    const el = slotInputRefs.current[key];
+    if (el) {
+      el.value = '';
     }
   };
 
+  const resetAllSlotInputs = () => {
+    Object.values(slotInputRefs.current).forEach((el) => {
+      if (el) el.value = '';
+    });
+  };
+
   const resetBagForm = () => {
-    clearObjectUrls(photoSlots);
+    revokeUrlList(collectAllPreviewUrls(photoSlots, variants));
     setEditingBagId(null);
     setName('');
     setCategory(collections[0]?.name || 'Tote Bags');
@@ -119,13 +353,11 @@ export default function StaffPortal({
     setColorHex('#142B22');
     setPhotoSlots(createEmptySlots());
     setVariants([]);
-    slotInputRefs.current.forEach((el) => {
-      if (el) el.value = '';
-    });
+    resetAllSlotInputs();
   };
 
   const handleStartEditBag = (bag) => {
-    clearObjectUrls(photoSlots);
+    revokeUrlList(collectAllPreviewUrls(photoSlots, variants));
     setActiveTab('bags');
     setEditingBagId(bag._id);
     setName(bag.name || '');
@@ -136,37 +368,28 @@ export default function StaffPortal({
     setColorName(bag.colorName || 'Classic');
     setColorHex(bag.colorHex || '#142B22');
 
-    const uniqueExisting = [bag.image, ...(bag.images || [])]
-      .filter(Boolean)
-      .filter((val, idx, arr) => arr.indexOf(val) === idx)
-      .slice(0, MAX_PHOTO_SLOTS);
-
-    const nextSlots = createEmptySlots();
-    uniqueExisting.forEach((url, idx) => {
-      nextSlots[idx] = {
-        existingUrl: url,
-        file: null,
-        previewUrl: '',
-      };
-    });
-    setPhotoSlots(nextSlots);
+    const primaryUrls = [bag.image, ...(bag.images || [])];
+    setPhotoSlots(hydrateSlotsFromUrls(primaryUrls));
 
     setVariants(
       Array.isArray(bag.variants)
-        ? bag.variants.map((v) => ({
-            colorName: v.colorName || '',
-            colorHex: v.colorHex || '#142B22',
-            stock: v.stock !== undefined ? String(v.stock) : '1',
-            image: v.image || '',
-            images: Array.isArray(v.images) ? v.images : v.image ? [v.image] : [],
-            files: [],
-          }))
+        ? bag.variants.map((v) => {
+            const variantUrls = [v.image, ...(v.images || [])];
+            return {
+              colorName: v.colorName || '',
+              colorHex: v.colorHex || '#6E2639',
+              stock: v.stock !== undefined && v.stock !== null ? String(v.stock) : '1',
+              photoSlots: hydrateSlotsFromUrls(variantUrls),
+            };
+          })
         : []
     );
+    resetAllSlotInputs();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleSelectSlotFile = (slotIdx, file) => {
+  // Primary bag slot handlers (position-constant)
+  const handleSelectPrimarySlotFile = (slotIdx, file) => {
     if (!file) return;
     const objectUrl = URL.createObjectURL(file);
     setPhotoSlots((prev) =>
@@ -184,7 +407,7 @@ export default function StaffPortal({
     );
   };
 
-  const handleClearSlot = (slotIdx) => {
+  const handleClearPrimarySlot = (slotIdx) => {
     setPhotoSlots((prev) =>
       prev.map((slot, idx) => {
         if (idx !== slotIdx) return slot;
@@ -198,11 +421,11 @@ export default function StaffPortal({
         };
       })
     );
-    resetSlotFileInput(slotIdx);
+    resetFileInputByKey(`primary_${slotIdx}`);
   };
 
-  const handleSwapSlots = (fromIdx, toIdx) => {
-    if (toIdx < 0 || toIdx >= MAX_PHOTO_SLOTS) return;
+  const handleSwapPrimarySlots = (fromIdx, toIdx) => {
+    if (toIdx < 0 || toIdx >= MAX_PHOTO_SLOTS || fromIdx === toIdx) return;
     setPhotoSlots((prev) => {
       const copy = [...prev];
       const temp = copy[fromIdx];
@@ -212,31 +435,92 @@ export default function StaffPortal({
     });
   };
 
+  // Color variant handlers (position-constant per variant)
   const handleAddVariantRow = () => {
-    setVariants((prev) => [
-      ...prev,
-      { colorName: '', colorHex: '#6E2639', stock: '1', image: '', images: [], files: [] },
-    ]);
+    setVariants((prev) => [...prev, createEmptyVariant()]);
   };
 
-  const handleUpdateVariantField = (idx, field, value) => {
+  const handleUpdateVariantField = (variantIdx, field, value) => {
     setVariants((prev) =>
-      prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item))
+      prev.map((item, idx) => (idx === variantIdx ? { ...item, [field]: value } : item))
     );
   };
 
-  const handleRemoveVariantRow = (idx) => {
-    setVariants((prev) => prev.filter((_, i) => i !== idx));
+  const handleRemoveVariantRow = (variantIdx) => {
+    setVariants((prev) => {
+      const target = prev[variantIdx];
+      if (target) {
+        revokeUrlList(collectSlotsObjectUrls(target.photoSlots || []));
+      }
+      return prev.filter((_, idx) => idx !== variantIdx);
+    });
+  };
+
+  const handleSelectVariantSlotFile = (variantIdx, slotIdx, file) => {
+    if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
+    setVariants((prev) =>
+      prev.map((variant, vIdx) => {
+        if (vIdx !== variantIdx) return variant;
+        const currentSlots = variant.photoSlots || createEmptySlots();
+        const nextSlots = currentSlots.map((slot, sIdx) => {
+          if (sIdx !== slotIdx) return slot;
+          if (slot.previewUrl) {
+            URL.revokeObjectURL(slot.previewUrl);
+          }
+          return {
+            existingUrl: '',
+            file,
+            previewUrl: objectUrl,
+          };
+        });
+        return { ...variant, photoSlots: nextSlots };
+      })
+    );
+  };
+
+  const handleClearVariantSlot = (variantIdx, slotIdx) => {
+    setVariants((prev) =>
+      prev.map((variant, vIdx) => {
+        if (vIdx !== variantIdx) return variant;
+        const currentSlots = variant.photoSlots || createEmptySlots();
+        const nextSlots = currentSlots.map((slot, sIdx) => {
+          if (sIdx !== slotIdx) return slot;
+          if (slot.previewUrl) {
+            URL.revokeObjectURL(slot.previewUrl);
+          }
+          return {
+            existingUrl: '',
+            file: null,
+            previewUrl: '',
+          };
+        });
+        return { ...variant, photoSlots: nextSlots };
+      })
+    );
+    resetFileInputByKey(`variant_${variantIdx}_${slotIdx}`);
+  };
+
+  const handleSwapVariantSlots = (variantIdx, fromIdx, toIdx) => {
+    if (toIdx < 0 || toIdx >= MAX_PHOTO_SLOTS || fromIdx === toIdx) return;
+    setVariants((prev) =>
+      prev.map((variant, vIdx) => {
+        if (vIdx !== variantIdx) return variant;
+        const copy = [...(variant.photoSlots || createEmptySlots())];
+        const temp = copy[fromIdx];
+        copy[fromIdx] = copy[toIdx];
+        copy[toIdx] = temp;
+        return { ...variant, photoSlots: copy };
+      })
+    );
   };
 
   const handleSaveBag = async (e) => {
     e.preventDefault();
     const trimmedName = name.trim();
-    const orderedSlots = photoSlots.filter((s) => Boolean(s.file || s.existingUrl));
-    const orderedFiles = orderedSlots.map((s) => s.file).filter(Boolean);
-    const orderedExistingUrls = orderedSlots.map((s) => s.existingUrl).filter(Boolean);
+    const primaryData = extractOrderedSlotData(photoSlots);
 
-    if (!trimmedName || price === '' || orderedSlots.length === 0) {
+    if (!trimmedName || price === '' || primaryData.activeSlots.length === 0) {
       showToast('Please provide a handbag name, price, and at least 1 photo in slots 1–4.', 'error');
       return;
     }
@@ -252,46 +536,45 @@ export default function StaffPortal({
       formData.append('colorName', (colorName || 'Classic').trim());
       formData.append('colorHex', colorHex || '#142B22');
 
-      orderedFiles.forEach((file) => {
+      primaryData.files.forEach((file) => {
         formData.append('imageFiles', file);
       });
-
-      formData.append('existingImagesJson', JSON.stringify(orderedExistingUrls));
-      formData.append(
-        'photoOrderJson',
-        JSON.stringify(
-          orderedSlots.map((slot, idx) => ({
-            position: idx + 1,
-            source: slot.file ? 'upload' : 'existing',
-            url: slot.existingUrl || '',
-            fileName: slot.file ? slot.file.name : '',
-          }))
-        )
-      );
+      formData.append('existingImagesJson', JSON.stringify(primaryData.existingImages));
+      formData.append('photoOrderJson', JSON.stringify(primaryData.photoOrder));
 
       const validVariants = variants.filter((v) => (v.colorName || '').trim());
       const serializedVariants = validVariants.map((v, idx) => {
-        if (Array.isArray(v.files) && v.files.length > 0) {
-          for (const f of v.files) {
-            formData.append(`variantFiles_${idx}`, f);
-          }
-        }
+        const vSlotData = extractOrderedSlotData(v.photoSlots || []);
+
+        vSlotData.files.forEach((file) => {
+          formData.append(`variantFiles_${idx}`, file);
+        });
+        formData.append(
+          `variantExistingImages_${idx}`,
+          JSON.stringify(vSlotData.existingImages)
+        );
+        formData.append(
+          `variantPhotoOrder_${idx}`,
+          JSON.stringify(vSlotData.photoOrder)
+        );
+
         return {
           colorName: v.colorName.trim(),
-          colorHex: v.colorHex || '#142B22',
+          colorHex: v.colorHex || '#6E2639',
           stock: Number(v.stock ?? 1),
-          image: v.image || '',
-          images: Array.isArray(v.images) ? v.images : [],
+          image: vSlotData.existingImages[0] || '',
+          images: vSlotData.existingImages,
+          photoOrder: vSlotData.photoOrder,
         };
       });
       formData.append('variantsJson', JSON.stringify(serializedVariants));
 
       if (editingBagId) {
         await apiRequest(`/api/bags/${editingBagId}`, { method: 'PUT', body: formData }, onForceLogout);
-        showToast('Handbag updated with your selected photo order!');
+        showToast('Handbag and color variant photo orders saved!');
       } else {
         await apiRequest('/api/bags', { method: 'POST', body: formData }, onForceLogout);
-        showToast('Handbag published with your selected photo order!');
+        showToast('Handbag and color variant photo orders published!');
       }
 
       resetBagForm();
@@ -545,8 +828,22 @@ export default function StaffPortal({
             </div>
 
             <div className="form-group">
+              <label style={{ display: 'block', marginBottom: '6px' }}>
+                Primary Bag Photo Order (Pick 1st, 2nd, 3rd, 4th) *
+              </label>
+              <SlotPhotoGrid
+                slots={photoSlots}
+                inputRefsMap={slotInputRefs}
+                keyPrefix="primary"
+                onSelectFile={handleSelectPrimarySlotFile}
+                onSwap={handleSwapPrimarySlots}
+                onClear={handleClearPrimarySlot}
+              />
+            </div>
+
+            <div className="form-group">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <label style={{ margin: 0 }}>Additional Color Variants (Optional)</label>
+                <label style={{ margin: 0 }}>Additional Color Variants &amp; Photo Order (Optional)</label>
                 <button
                   type="button"
                   onClick={handleAddVariantRow}
@@ -562,212 +859,66 @@ export default function StaffPortal({
                 </button>
               </div>
 
-              {variants.map((v, idx) => (
+              {variants.map((v, vIdx) => (
                 <div
-                  key={idx}
+                  key={vIdx}
                   style={{
                     border: '1px solid var(--border-subtle)',
                     background: 'var(--bg-alabaster)',
                     padding: '10px',
-                    marginBottom: '8px',
+                    marginBottom: '10px',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '8px',
+                    gap: '10px',
                   }}
                 >
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <input
                       type="text"
                       value={v.colorName}
-                      onChange={(e) => handleUpdateVariantField(idx, 'colorName', e.target.value)}
+                      onChange={(e) => handleUpdateVariantField(vIdx, 'colorName', e.target.value)}
                       placeholder="Color name (e.g. Burgundy)"
                       style={{ border: '1px solid var(--border-subtle)', padding: '7px', background: '#fff', flex: 1, fontSize: '13px' }}
                     />
                     <input
                       type="color"
-                      value={v.colorHex || '#142B22'}
-                      onChange={(e) => handleUpdateVariantField(idx, 'colorHex', e.target.value)}
+                      value={v.colorHex || '#6E2639'}
+                      onChange={(e) => handleUpdateVariantField(vIdx, 'colorHex', e.target.value)}
                       style={{ width: '36px', height: '34px', border: '1px solid var(--border-subtle)', background: 'transparent' }}
                     />
                     <input
                       type="number"
                       min="0"
                       value={v.stock}
-                      onChange={(e) => handleUpdateVariantField(idx, 'stock', e.target.value)}
+                      onChange={(e) => handleUpdateVariantField(vIdx, 'stock', e.target.value)}
                       placeholder="Qty"
                       style={{ width: '68px', border: '1px solid var(--border-subtle)', padding: '7px', background: '#fff', fontSize: '13px' }}
                     />
                     <button
                       type="button"
-                      onClick={() => handleRemoveVariantRow(idx)}
+                      onClick={() => handleRemoveVariantRow(vIdx)}
                       style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }}
                       title="Remove color variant"
                     >
                       <Trash2 size={15} />
                     </button>
                   </div>
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    onChange={(e) => handleUpdateVariantField(idx, 'files', Array.from(e.target.files || []))}
-                    style={{ fontSize: '12px' }}
-                  />
+
+                  <div>
+                    <span style={{ display: 'block', fontSize: '11px', fontWeight: '600', marginBottom: '6px' }}>
+                      {v.colorName ? `${v.colorName} Photo Order (1st–4th)` : 'Variant Photo Order (1st–4th)'}
+                    </span>
+                    <SlotPhotoGrid
+                      slots={v.photoSlots || createEmptySlots()}
+                      inputRefsMap={slotInputRefs}
+                      keyPrefix={`variant_${vIdx}`}
+                      onSelectFile={(slotIdx, file) => handleSelectVariantSlotFile(vIdx, slotIdx, file)}
+                      onSwap={(fromIdx, toIdx) => handleSwapVariantSlots(vIdx, fromIdx, toIdx)}
+                      onClear={(slotIdx) => handleClearVariantSlot(vIdx, slotIdx)}
+                    />
+                  </div>
                 </div>
               ))}
-            </div>
-
-            <div className="form-group">
-              <label style={{ display: 'block', marginBottom: '6px' }}>
-                Handbag Photo Order (Pick 1st, 2nd, 3rd, 4th) *
-              </label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {photoSlots.map((slot, slotIdx) => {
-                  const displaySrc = slot.previewUrl
-                    ? slot.previewUrl
-                    : slot.existingUrl
-                    ? resolveBagImage(slot.existingUrl)
-                    : '';
-
-                  return (
-                    <div
-                      key={slotIdx}
-                      style={{
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-alabaster)',
-                        padding: '8px 10px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '8px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                        <span
-                          style={{
-                            fontSize: '11px',
-                            fontWeight: '700',
-                            minWidth: '72px',
-                            color: 'var(--forest-green)',
-                          }}
-                        >
-                          {SLOT_LABELS[slotIdx]}
-                        </span>
-
-                        {displaySrc ? (
-                          <img
-                            src={displaySrc}
-                            alt={`${SLOT_LABELS[slotIdx]} photo`}
-                            style={{
-                              width: '38px',
-                              height: '44px',
-                              objectFit: 'cover',
-                              border: '1px solid var(--border-subtle)',
-                              flexShrink: 0,
-                            }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: '38px',
-                              height: '44px',
-                              border: '1px dashed var(--border-subtle)',
-                              background: '#fff',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: '11px',
-                              color: 'var(--text-muted)',
-                              flexShrink: 0,
-                            }}
-                          >
-                            #{slotIdx + 1}
-                          </div>
-                        )}
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
-                          <input
-                            ref={(el) => {
-                              slotInputRefs.current[slotIdx] = el;
-                            }}
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => {
-                              const picked = e.target.files?.[0];
-                              if (picked) {
-                                handleSelectSlotFile(slotIdx, picked);
-                              }
-                            }}
-                            style={{ fontSize: '11px', maxWidth: '100%' }}
-                          />
-                          {slot.file && (
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                color: 'var(--text-muted)',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {slot.file.name}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                        <button
-                          type="button"
-                          disabled={slotIdx === 0}
-                          onClick={() => handleSwapSlots(slotIdx, slotIdx - 1)}
-                          title="Move up"
-                          style={{
-                            background: '#fff',
-                            border: '1px solid var(--border-subtle)',
-                            padding: '4px',
-                            cursor: slotIdx === 0 ? 'not-allowed' : 'pointer',
-                            opacity: slotIdx === 0 ? 0.4 : 1,
-                          }}
-                        >
-                          <ArrowUp size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={slotIdx === MAX_PHOTO_SLOTS - 1}
-                          onClick={() => handleSwapSlots(slotIdx, slotIdx + 1)}
-                          title="Move down"
-                          style={{
-                            background: '#fff',
-                            border: '1px solid var(--border-subtle)',
-                            padding: '4px',
-                            cursor: slotIdx === MAX_PHOTO_SLOTS - 1 ? 'not-allowed' : 'pointer',
-                            opacity: slotIdx === MAX_PHOTO_SLOTS - 1 ? 0.4 : 1,
-                          }}
-                        >
-                          <ArrowDown size={13} />
-                        </button>
-                        {(slot.file || slot.existingUrl) && (
-                          <button
-                            type="button"
-                            onClick={() => handleClearSlot(slotIdx)}
-                            title="Clear slot"
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              color: 'var(--danger)',
-                              cursor: 'pointer',
-                              padding: '4px',
-                            }}
-                          >
-                            <X size={14} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
 
             <div className="form-group">
