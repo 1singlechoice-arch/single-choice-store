@@ -1,11 +1,22 @@
-import React, { useState } from 'react';
-import { Trash2, Video, Package, Pencil, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Trash2, Video, Package, Pencil, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { apiRequest, resolveBagImage } from '../utils/api';
+
+const MAX_PHOTO_SLOTS = 4;
+const SLOT_LABELS = ['1st (Cover)', '2nd', '3rd', '4th'];
+
+function createEmptySlots() {
+  return Array.from({ length: MAX_PHOTO_SLOTS }, () => ({
+    existingUrl: '',
+    file: null,
+    previewUrl: '',
+  }));
+}
 
 export default function StaffPortal({
   user,
-  bags,
-  collections,
+  bags = [],
+  collections = [],
   heroImage,
   heroVideo,
   heroEyebrow,
@@ -21,19 +32,22 @@ export default function StaffPortal({
 }) {
   const [activeTab, setActiveTab] = useState('bags'); // 'bags' | 'collections' | 'hero'
 
+  const defaultCategory = collections[0]?.name || 'Tote Bags';
+
   // Add / Edit Bag Form State
   const [editingBagId, setEditingBagId] = useState(null);
   const [name, setName] = useState('');
-  const [category, setCategory] = useState(collections[0]?.name || 'Tote Bags');
+  const [category, setCategory] = useState(defaultCategory);
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('1');
   const [description, setDescription] = useState('');
   const [colorName, setColorName] = useState('Classic');
   const [colorHex, setColorHex] = useState('#142B22');
-  const [existingImages, setExistingImages] = useState([]);
-  const [imageFiles, setImageFiles] = useState([]);
+  const [photoSlots, setPhotoSlots] = useState(() => createEmptySlots());
   const [variants, setVariants] = useState([]);
   const [submittingBag, setSubmittingBag] = useState(false);
+
+  const slotInputRefs = useRef([]);
 
   // New Collection State
   const [newColName, setNewColName] = useState('');
@@ -48,7 +62,53 @@ export default function StaffPortal({
   // Media Upload State
   const [uploadingHero, setUploadingHero] = useState(false);
 
+  useEffect(() => {
+    if (!editingBagId && collections.length > 0) {
+      setCategory((prev) =>
+        collections.some((c) => c.name === prev) ? prev : collections[0].name
+      );
+    }
+  }, [collections, editingBagId]);
+
+  useEffect(() => {
+    setEyebrowInput(heroEyebrow || '');
+  }, [heroEyebrow]);
+
+  useEffect(() => {
+    setTitleInput(heroTitle || '');
+  }, [heroTitle]);
+
+  useEffect(() => {
+    setSubtitleInput(heroSubtitle || '');
+  }, [heroSubtitle]);
+
+  useEffect(() => {
+    setCtaInput(heroCtaText || '');
+  }, [heroCtaText]);
+
+  const clearObjectUrls = (slots) => {
+    slots.forEach((slot) => {
+      if (slot.previewUrl) {
+        URL.revokeObjectURL(slot.previewUrl);
+      }
+    });
+  };
+
+  useEffect(() => {
+    return () => {
+      clearObjectUrls(photoSlots);
+    };
+  }, [photoSlots]);
+
+  const resetSlotFileInput = (slotIdx) => {
+    const inputEl = slotInputRefs.current[slotIdx];
+    if (inputEl) {
+      inputEl.value = '';
+    }
+  };
+
   const resetBagForm = () => {
+    clearObjectUrls(photoSlots);
     setEditingBagId(null);
     setName('');
     setCategory(collections[0]?.name || 'Tote Bags');
@@ -57,25 +117,40 @@ export default function StaffPortal({
     setDescription('');
     setColorName('Classic');
     setColorHex('#142B22');
-    setExistingImages([]);
-    setImageFiles([]);
+    setPhotoSlots(createEmptySlots());
     setVariants([]);
+    slotInputRefs.current.forEach((el) => {
+      if (el) el.value = '';
+    });
   };
 
   const handleStartEditBag = (bag) => {
+    clearObjectUrls(photoSlots);
     setActiveTab('bags');
     setEditingBagId(bag._id);
     setName(bag.name || '');
     setCategory(bag.category || collections[0]?.name || 'Tote Bags');
-    setPrice(bag.price !== undefined ? String(bag.price) : '');
-    setStock(bag.stock !== undefined ? String(bag.stock) : '1');
+    setPrice(bag.price !== undefined && bag.price !== null ? String(bag.price) : '');
+    setStock(bag.stock !== undefined && bag.stock !== null ? String(bag.stock) : '1');
     setDescription(bag.description || '');
     setColorName(bag.colorName || 'Classic');
     setColorHex(bag.colorHex || '#142B22');
-    setExistingImages(
-      [bag.image, ...(bag.images || [])].filter(Boolean).filter((val, idx, arr) => arr.indexOf(val) === idx)
-    );
-    setImageFiles([]);
+
+    const uniqueExisting = [bag.image, ...(bag.images || [])]
+      .filter(Boolean)
+      .filter((val, idx, arr) => arr.indexOf(val) === idx)
+      .slice(0, MAX_PHOTO_SLOTS);
+
+    const nextSlots = createEmptySlots();
+    uniqueExisting.forEach((url, idx) => {
+      nextSlots[idx] = {
+        existingUrl: url,
+        file: null,
+        previewUrl: '',
+      };
+    });
+    setPhotoSlots(nextSlots);
+
     setVariants(
       Array.isArray(bag.variants)
         ? bag.variants.map((v) => ({
@@ -89,6 +164,52 @@ export default function StaffPortal({
         : []
     );
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectSlotFile = (slotIdx, file) => {
+    if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
+    setPhotoSlots((prev) =>
+      prev.map((slot, idx) => {
+        if (idx !== slotIdx) return slot;
+        if (slot.previewUrl) {
+          URL.revokeObjectURL(slot.previewUrl);
+        }
+        return {
+          existingUrl: '',
+          file,
+          previewUrl: objectUrl,
+        };
+      })
+    );
+  };
+
+  const handleClearSlot = (slotIdx) => {
+    setPhotoSlots((prev) =>
+      prev.map((slot, idx) => {
+        if (idx !== slotIdx) return slot;
+        if (slot.previewUrl) {
+          URL.revokeObjectURL(slot.previewUrl);
+        }
+        return {
+          existingUrl: '',
+          file: null,
+          previewUrl: '',
+        };
+      })
+    );
+    resetSlotFileInput(slotIdx);
+  };
+
+  const handleSwapSlots = (fromIdx, toIdx) => {
+    if (toIdx < 0 || toIdx >= MAX_PHOTO_SLOTS) return;
+    setPhotoSlots((prev) => {
+      const copy = [...prev];
+      const temp = copy[fromIdx];
+      copy[fromIdx] = copy[toIdx];
+      copy[toIdx] = temp;
+      return copy;
+    });
   };
 
   const handleAddVariantRow = () => {
@@ -111,10 +232,12 @@ export default function StaffPortal({
   const handleSaveBag = async (e) => {
     e.preventDefault();
     const trimmedName = name.trim();
-    const hasExistingOrNewPrimaryPhoto = imageFiles.length > 0 || (editingBagId && existingImages.length > 0);
+    const orderedSlots = photoSlots.filter((s) => Boolean(s.file || s.existingUrl));
+    const orderedFiles = orderedSlots.map((s) => s.file).filter(Boolean);
+    const orderedExistingUrls = orderedSlots.map((s) => s.existingUrl).filter(Boolean);
 
-    if (!trimmedName || price === '' || !hasExistingOrNewPrimaryPhoto) {
-      showToast('Please provide a handbag name, price, and at least 1 photo.', 'error');
+    if (!trimmedName || price === '' || orderedSlots.length === 0) {
+      showToast('Please provide a handbag name, price, and at least 1 photo in slots 1–4.', 'error');
       return;
     }
 
@@ -129,9 +252,22 @@ export default function StaffPortal({
       formData.append('colorName', (colorName || 'Classic').trim());
       formData.append('colorHex', colorHex || '#142B22');
 
-      for (const file of imageFiles) {
+      orderedFiles.forEach((file) => {
         formData.append('imageFiles', file);
-      }
+      });
+
+      formData.append('existingImagesJson', JSON.stringify(orderedExistingUrls));
+      formData.append(
+        'photoOrderJson',
+        JSON.stringify(
+          orderedSlots.map((slot, idx) => ({
+            position: idx + 1,
+            source: slot.file ? 'upload' : 'existing',
+            url: slot.existingUrl || '',
+            fileName: slot.file ? slot.file.name : '',
+          }))
+        )
+      );
 
       const validVariants = variants.filter((v) => (v.colorName || '').trim());
       const serializedVariants = validVariants.map((v, idx) => {
@@ -152,16 +288,18 @@ export default function StaffPortal({
 
       if (editingBagId) {
         await apiRequest(`/api/bags/${editingBagId}`, { method: 'PUT', body: formData }, onForceLogout);
-        showToast('Handbag updated successfully!');
+        showToast('Handbag updated with your selected photo order!');
       } else {
         await apiRequest('/api/bags', { method: 'POST', body: formData }, onForceLogout);
-        showToast('Handbag added successfully!');
+        showToast('Handbag published with your selected photo order!');
       }
 
       resetBagForm();
-      onRefreshBags();
+      if (typeof onRefreshBags === 'function') {
+        onRefreshBags();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to save handbag.', 'error');
     } finally {
       setSubmittingBag(false);
     }
@@ -175,9 +313,11 @@ export default function StaffPortal({
         resetBagForm();
       }
       showToast('Handbag removed.');
-      onRefreshBags();
+      if (typeof onRefreshBags === 'function') {
+        onRefreshBags();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to delete handbag.', 'error');
     }
   };
 
@@ -185,12 +325,18 @@ export default function StaffPortal({
     e.preventDefault();
     if (!newColName.trim()) return;
     try {
-      await apiRequest('/api/collections', { method: 'POST', body: JSON.stringify({ name: newColName }) }, onForceLogout);
+      await apiRequest(
+        '/api/collections',
+        { method: 'POST', body: JSON.stringify({ name: newColName.trim() }) },
+        onForceLogout
+      );
       showToast('Collection added.');
       setNewColName('');
-      onRefreshCollections();
+      if (typeof onRefreshCollections === 'function') {
+        onRefreshCollections();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to create collection.', 'error');
     }
   };
 
@@ -199,9 +345,11 @@ export default function StaffPortal({
     try {
       await apiRequest(`/api/collections/${id}`, { method: 'DELETE' }, onForceLogout);
       showToast('Collection removed.');
-      onRefreshCollections();
+      if (typeof onRefreshCollections === 'function') {
+        onRefreshCollections();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to delete collection.', 'error');
     }
   };
 
@@ -223,15 +371,18 @@ export default function StaffPortal({
         onForceLogout
       );
       showToast('Hero campaign text updated successfully!');
-      onRefreshSettings();
+      if (typeof onRefreshSettings === 'function') {
+        onRefreshSettings();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to save campaign text.', 'error');
     } finally {
       setSavingText(false);
     }
   };
 
   const handleUploadHeroMedia = async (file, isVideo = false) => {
+    if (!file) return;
     setUploadingHero(true);
     try {
       const formData = new FormData();
@@ -240,9 +391,11 @@ export default function StaffPortal({
 
       await apiRequest(endpoint, { method: 'POST', body: formData }, onForceLogout);
       showToast(isVideo ? 'Campaign video updated!' : 'Hero banner updated!');
-      onRefreshSettings();
+      if (typeof onRefreshSettings === 'function') {
+        onRefreshSettings();
+      }
     } catch (err) {
-      showToast(err.message, 'error');
+      showToast(err.message || 'Failed to upload media.', 'error');
     } finally {
       setUploadingHero(false);
     }
@@ -253,7 +406,7 @@ export default function StaffPortal({
       <div className="section-header-row" style={{ marginBottom: '24px' }}>
         <div>
           <span className="eyebrow-gold">STAFF &amp; INVENTORY PORTAL</span>
-          <h1 className="editorial-heading">Boutique Management ({user.role})</h1>
+          <h1 className="editorial-heading">Boutique Management ({user?.role || 'staff'})</h1>
         </div>
         <button type="button" className="btn-secondary" onClick={onBackToStore}>
           ← Back to Storefront
@@ -351,6 +504,7 @@ export default function StaffPortal({
               <input
                 type="number"
                 required
+                min="0"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 placeholder="150000"
@@ -363,6 +517,7 @@ export default function StaffPortal({
               <input
                 type="number"
                 required
+                min="0"
                 value={stock}
                 onChange={(e) => setStock(e.target.value)}
                 placeholder="5"
@@ -455,7 +610,7 @@ export default function StaffPortal({
                     type="file"
                     multiple
                     accept="image/*"
-                    onChange={(e) => handleUpdateVariantField(idx, 'files', Array.from(e.target.files))}
+                    onChange={(e) => handleUpdateVariantField(idx, 'files', Array.from(e.target.files || []))}
                     style={{ fontSize: '12px' }}
                   />
                 </div>
@@ -463,28 +618,156 @@ export default function StaffPortal({
             </div>
 
             <div className="form-group">
-              <label>
-                Handbag Photos (Select up to 4) {editingBagId ? '(Leave empty to keep current photos)' : '*'}
+              <label style={{ display: 'block', marginBottom: '6px' }}>
+                Handbag Photo Order (Pick 1st, 2nd, 3rd, 4th) *
               </label>
-              {editingBagId && existingImages.length > 0 && imageFiles.length === 0 && (
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                  {existingImages.map((img, i) => (
-                    <img
-                      key={i}
-                      src={resolveBagImage(img)}
-                      alt=""
-                      style={{ width: '44px', height: '50px', objectFit: 'cover', border: '1px solid var(--border-subtle)' }}
-                    />
-                  ))}
-                </div>
-              )}
-              <input
-                type="file"
-                multiple
-                accept="image/*"
-                onChange={(e) => setImageFiles(Array.from(e.target.files))}
-                style={{ border: '1px solid var(--border-subtle)', padding: '8px', background: 'var(--bg-alabaster)' }}
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {photoSlots.map((slot, slotIdx) => {
+                  const displaySrc = slot.previewUrl
+                    ? slot.previewUrl
+                    : slot.existingUrl
+                    ? resolveBagImage(slot.existingUrl)
+                    : '';
+
+                  return (
+                    <div
+                      key={slotIdx}
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-alabaster)',
+                        padding: '8px 10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: '700',
+                            minWidth: '72px',
+                            color: 'var(--forest-green)',
+                          }}
+                        >
+                          {SLOT_LABELS[slotIdx]}
+                        </span>
+
+                        {displaySrc ? (
+                          <img
+                            src={displaySrc}
+                            alt={`${SLOT_LABELS[slotIdx]} photo`}
+                            style={{
+                              width: '38px',
+                              height: '44px',
+                              objectFit: 'cover',
+                              border: '1px solid var(--border-subtle)',
+                              flexShrink: 0,
+                            }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: '38px',
+                              height: '44px',
+                              border: '1px dashed var(--border-subtle)',
+                              background: '#fff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '11px',
+                              color: 'var(--text-muted)',
+                              flexShrink: 0,
+                            }}
+                          >
+                            #{slotIdx + 1}
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
+                          <input
+                            ref={(el) => {
+                              slotInputRefs.current[slotIdx] = el;
+                            }}
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const picked = e.target.files?.[0];
+                              if (picked) {
+                                handleSelectSlotFile(slotIdx, picked);
+                              }
+                            }}
+                            style={{ fontSize: '11px', maxWidth: '100%' }}
+                          />
+                          {slot.file && (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                color: 'var(--text-muted)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {slot.file.name}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          disabled={slotIdx === 0}
+                          onClick={() => handleSwapSlots(slotIdx, slotIdx - 1)}
+                          title="Move up"
+                          style={{
+                            background: '#fff',
+                            border: '1px solid var(--border-subtle)',
+                            padding: '4px',
+                            cursor: slotIdx === 0 ? 'not-allowed' : 'pointer',
+                            opacity: slotIdx === 0 ? 0.4 : 1,
+                          }}
+                        >
+                          <ArrowUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={slotIdx === MAX_PHOTO_SLOTS - 1}
+                          onClick={() => handleSwapSlots(slotIdx, slotIdx + 1)}
+                          title="Move down"
+                          style={{
+                            background: '#fff',
+                            border: '1px solid var(--border-subtle)',
+                            padding: '4px',
+                            cursor: slotIdx === MAX_PHOTO_SLOTS - 1 ? 'not-allowed' : 'pointer',
+                            opacity: slotIdx === MAX_PHOTO_SLOTS - 1 ? 0.4 : 1,
+                          }}
+                        >
+                          <ArrowDown size={13} />
+                        </button>
+                        {(slot.file || slot.existingUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearSlot(slotIdx)}
+                            title="Clear slot"
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--danger)',
+                              cursor: 'pointer',
+                              padding: '4px',
+                            }}
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="form-group">
@@ -525,11 +808,15 @@ export default function StaffPortal({
                     gap: '12px',
                   }}
                 >
-                  <img src={resolveBagImage(bag.image || bag.images?.[0])} alt="" style={{ width: '50px', height: '56px', objectFit: 'cover' }} />
+                  <img
+                    src={resolveBagImage(bag.image || bag.images?.[0])}
+                    alt={bag.name || 'Handbag'}
+                    style={{ width: '50px', height: '56px', objectFit: 'cover' }}
+                  />
                   <div style={{ flex: 1 }}>
                     <h4 style={{ fontFamily: 'var(--font-serif)', fontSize: '15px' }}>{bag.name}</h4>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {bag.category} • ₦{Number(bag.price).toLocaleString()} • Stock: {bag.stock}
+                      {bag.category} • ₦{Number(bag.price || 0).toLocaleString()} • Stock: {bag.stock}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -551,7 +838,7 @@ export default function StaffPortal({
                     >
                       <Pencil size={14} /> Edit
                     </button>
-                    {user.role === 'admin' && (
+                    {user?.role === 'admin' && (
                       <button
                         type="button"
                         onClick={() => handleDeleteBag(bag._id)}
@@ -571,7 +858,10 @@ export default function StaffPortal({
 
       {activeTab === 'collections' && (
         <div style={{ maxWidth: '600px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <form onSubmit={handleCreateCollection} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', padding: '20px', display: 'flex', gap: '10px' }}>
+          <form
+            onSubmit={handleCreateCollection}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', padding: '20px', display: 'flex', gap: '10px' }}
+          >
             <input
               type="text"
               required
@@ -585,10 +875,24 @@ export default function StaffPortal({
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {collections.map((col) => (
-              <div key={col._id || col.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', padding: '14px 18px' }}>
+              <div
+                key={col._id || col.name}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '14px 18px',
+                }}
+              >
                 <strong>{col.name}</strong>
-                {user.role === 'admin' && (
-                  <button type="button" onClick={() => handleDeleteCollection(col._id)} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }}>
+                {user?.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCollection(col._id)}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }}
+                  >
                     <Trash2 size={16} />
                   </button>
                 )}
@@ -600,7 +904,17 @@ export default function StaffPortal({
 
       {activeTab === 'hero' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '28px' }}>
-          <form onSubmit={handleSaveHeroText} style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <form
+            onSubmit={handleSaveHeroText}
+            style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-subtle)',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+            }}
+          >
             <h3>Edit Campaign Banner Text</h3>
             <div className="form-group">
               <label>Hero Eyebrow (Small Tagline)</label>
@@ -643,29 +957,59 @@ export default function StaffPortal({
             </button>
           </form>
 
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div
+            style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-subtle)',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+            }}
+          >
             <h3>Upload Hero Media</h3>
             <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px' }}>Campaign Video (MP4 / WebM)</label>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px' }}>
+                Campaign Video (MP4 / WebM)
+              </label>
               <input
                 type="file"
                 accept="video/mp4,video/webm,video/mov"
-                onChange={(e) => e.target.files[0] && handleUploadHeroMedia(e.target.files[0], true)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUploadHeroMedia(file, true);
+                  e.target.value = '';
+                }}
                 style={{ border: '1px solid var(--border-subtle)', padding: '8px', background: 'var(--bg-alabaster)', width: '100%' }}
               />
             </div>
 
             <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px' }}>Fallback / Poster Image</label>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '13px' }}>
+                Fallback / Poster Image
+              </label>
               <input
                 type="file"
                 accept="image/*"
-                onChange={(e) => e.target.files[0] && handleUploadHeroMedia(e.target.files[0], false)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUploadHeroMedia(file, false);
+                  e.target.value = '';
+                }}
                 style={{ border: '1px solid var(--border-subtle)', padding: '8px', background: 'var(--bg-alabaster)', width: '100%' }}
               />
             </div>
 
-            {uploadingHero && <p style={{ fontSize: '13px', color: 'var(--champagne-gold)' }}>Uploading media to Cloudinary...</p>}
+            {(heroVideo || heroImage) && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                {heroVideo && <div>Active campaign video configured</div>}
+                {heroImage && <div>Active poster image configured</div>}
+              </div>
+            )}
+
+            {uploadingHero && (
+              <p style={{ fontSize: '13px', color: 'var(--champagne-gold)' }}>Uploading media to Cloudinary...</p>
+            )}
           </div>
         </div>
       )}
