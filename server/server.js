@@ -633,9 +633,41 @@ app.post('/api/checkout/initialize', protect, async (req, res) => {
     });
 
     await sendOrderEmails(createdOrder, user, 'placed');
-    res.json({ authorization_url: '#', reference, subtotal, deliveryFee, totalAmount });
+
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      return res.json({ authorization_url: '#', reference, subtotal, deliveryFee, totalAmount });
+    }
+
+    const clientBase = (process.env.CLIENT_URL || 'https://choice-store.vercel.app')
+      .trim()
+      .replace(/\/+$/, '');
+
+    const paystackRes = await axios.post(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        email: user.email,
+        amount: Math.round(totalAmount * 100),
+        reference,
+        callback_url: `${clientBase}/?reference=${encodeURIComponent(reference)}`,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const authorizationUrl = paystackRes.data?.data?.authorization_url || '#';
+    res.json({
+      authorization_url: authorizationUrl,
+      reference,
+      subtotal,
+      deliveryFee,
+      totalAmount,
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: err.response?.data?.message || err.message });
   }
 });
 
