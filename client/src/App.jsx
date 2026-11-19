@@ -406,16 +406,44 @@ export default function App() {
   const cartSubtotal = isStaff ? 0 : cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
 
   const activeBagPresentation = selectedBag
-    ? {
-        photos: [selectedBag.image, ...(selectedBag.images || [])].filter(Boolean),
-        stock:
-          selectedColor.toLowerCase() === (selectedBag.colorName || 'Classic').toLowerCase()
-            ? selectedBag.stock ?? 1
-            : (selectedBag.variants || []).find(
-                (v) => v.colorName.toLowerCase() === selectedColor.toLowerCase()
-              )?.stock ?? 1,
-      }
-    : { photos: [], stock: 1 };
+    ? (() => {
+        const primaryColor = selectedBag.colorName || 'Classic';
+        const isPrimary = selectedColor.toLowerCase() === primaryColor.toLowerCase();
+        const matchedVariant = !isPrimary
+          ? (selectedBag.variants || []).find(
+              (v) => v.colorName.toLowerCase() === selectedColor.toLowerCase()
+            )
+          : null;
+
+        const variantPhotos = matchedVariant
+          ? [matchedVariant.image, ...(matchedVariant.images || [])].filter(Boolean)
+          : [];
+        const fallbackPhotos = [selectedBag.image, ...(selectedBag.images || [])].filter(Boolean);
+
+        const rawColors = [
+          {
+            colorName: primaryColor,
+            colorHex: selectedBag.colorHex || '#142B22',
+            stock: selectedBag.stock ?? 1,
+          },
+          ...(selectedBag.variants || []).map((v) => ({
+            colorName: v.colorName,
+            colorHex: v.colorHex || '#142B22',
+            stock: v.stock ?? 1,
+          })),
+        ];
+
+        const uniqueColors = rawColors.filter(
+          (c, idx, arr) => arr.findIndex((item) => item.colorName.toLowerCase() === c.colorName.toLowerCase()) === idx
+        );
+
+        return {
+          photos: variantPhotos.length > 0 ? variantPhotos : fallbackPhotos,
+          stock: isPrimary ? selectedBag.stock ?? 1 : matchedVariant?.stock ?? 1,
+          allColors: uniqueColors,
+        };
+      })()
+    : { photos: [], stock: 1, allColors: [] };
 
   return (
     <div className="site-wrapper">
@@ -1285,6 +1313,59 @@ export default function App() {
                 <div className="product-modal-price">
                   ₦{Number(selectedBag.price).toLocaleString()}
                 </div>
+
+                {activeBagPresentation.allColors.length > 0 && (
+                  <div style={{ margin: '12px 0 14px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: 'var(--forest-green)' }}>
+                      Color:{' '}
+                      <span style={{ fontWeight: '400', color: 'var(--text-muted)' }}>
+                        {selectedColor}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {activeBagPresentation.allColors.map((col) => {
+                        const isSelected = selectedColor.toLowerCase() === col.colorName.toLowerCase();
+                        return (
+                          <button
+                            key={col.colorName}
+                            type="button"
+                            onClick={() => {
+                              setSelectedColor(col.colorName);
+                              setActivePhotoIndex(0);
+                              setSelectedQty((q) => Math.min(q, Math.max(1, col.stock)));
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 12px',
+                              border: isSelected
+                                ? '1.5px solid var(--forest-green)'
+                                : '1px solid var(--border-subtle)',
+                              background: isSelected ? 'var(--bg-alabaster)' : '#FFFFFF',
+                              fontSize: '12.5px',
+                              fontWeight: isSelected ? '600' : '400',
+                              color: 'var(--forest-green)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <span
+                              style={{
+                                width: '14px',
+                                height: '14px',
+                                borderRadius: '50%',
+                                backgroundColor: col.colorHex,
+                                border: '1px solid rgba(0,0,0,0.2)',
+                                display: 'inline-block',
+                              }}
+                            />
+                            <span>{col.colorName}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {selectedBag.description && (
                   <p className="product-modal-desc">{selectedBag.description}</p>

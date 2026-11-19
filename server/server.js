@@ -605,26 +605,134 @@ app.get('/api/bags', async (req, res) => {
 
 app.post('/api/bags', protect, staffOnly, upload.any(), async (req, res) => {
   try {
-    const { name, category, price, stock, description, colorName, colorHex } = req.body;
+    const { name, category, price, stock, description, colorName, colorHex, variantsJson } = req.body;
     const primaryFiles = (req.files || []).filter((f) => f.fieldname === 'imageFiles');
     if (primaryFiles.length === 0) {
       return res.status(400).json({ message: 'Please select at least 1 photo.' });
     }
 
+    let variants = [];
+    if (variantsJson) {
+      const parsed = JSON.parse(variantsJson);
+      if (Array.isArray(parsed)) {
+        variants = parsed
+          .filter((v) => v && (v.colorName || '').trim())
+          .map((v, idx) => {
+            const vFiles = (req.files || []).filter((f) => f.fieldname === `variantFiles_${idx}`);
+            const vUrls =
+              vFiles.length > 0
+                ? vFiles.map((f) => f.path)
+                : Array.isArray(v.images)
+                ? v.images
+                : v.image
+                ? [v.image]
+                : [];
+            return {
+              colorName: v.colorName.trim(),
+              colorHex: v.colorHex || '#142B22',
+              stock: Number(v.stock ?? 1),
+              image: vUrls[0] || '',
+              images: vUrls,
+            };
+          });
+      }
+    }
+
     const primaryImageUrls = primaryFiles.map((f) => f.path);
+    const numStock = Number(stock ?? 1);
+    const totalRemaining =
+      numStock + variants.reduce((sum, v) => sum + (v.stock ?? 0), 0);
+
     const bag = await Bag.create({
-      name,
-      category,
+      name: (name || '').trim(),
+      category: (category || '').trim(),
       price: Number(price),
-      stock: Number(stock ?? 1),
+      stock: numStock,
       description: description || '',
-      colorName: colorName || 'Classic',
+      colorName: (colorName || 'Classic').trim(),
       colorHex: colorHex || '#142B22',
       image: primaryImageUrls[0],
       images: primaryImageUrls,
-      inStock: Number(stock ?? 1) > 0,
+      variants,
+      inStock: totalRemaining > 0,
     });
     res.status(201).json(bag);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+app.put('/api/bags/:id', protect, staffOnly, upload.any(), async (req, res) => {
+  try {
+    const bag = await Bag.findById(req.params.id);
+    if (!bag) {
+      return res.status(404).json({ message: 'Handbag not found.' });
+    }
+
+    const { name, category, price, stock, description, colorName, colorHex, variantsJson } = req.body;
+
+    if (name !== undefined && String(name).trim()) {
+      bag.name = String(name).trim();
+    }
+    if (category !== undefined && String(category).trim()) {
+      bag.category = String(category).trim();
+    }
+    if (price !== undefined && price !== '') {
+      bag.price = Number(price);
+    }
+    if (stock !== undefined && stock !== '') {
+      bag.stock = Number(stock);
+    }
+    if (description !== undefined) {
+      bag.description = description;
+    }
+    if (colorName !== undefined && String(colorName).trim()) {
+      bag.colorName = String(colorName).trim();
+    }
+    if (colorHex !== undefined && String(colorHex).trim()) {
+      bag.colorHex = String(colorHex).trim();
+    }
+
+    const primaryFiles = (req.files || []).filter((f) => f.fieldname === 'imageFiles');
+    if (primaryFiles.length > 0) {
+      const uploadedUrls = primaryFiles.map((f) => f.path);
+      bag.image = uploadedUrls[0];
+      bag.images = uploadedUrls;
+    }
+
+    if (variantsJson !== undefined) {
+      const parsedVariants = JSON.parse(variantsJson);
+      if (Array.isArray(parsedVariants)) {
+        bag.variants = parsedVariants
+          .filter((v) => v && (v.colorName || '').trim())
+          .map((v, idx) => {
+            const vFiles = (req.files || []).filter((f) => f.fieldname === `variantFiles_${idx}`);
+            const vUrls =
+              vFiles.length > 0
+                ? vFiles.map((f) => f.path)
+                : Array.isArray(v.images)
+                ? v.images
+                : v.image
+                ? [v.image]
+                : [];
+            return {
+              colorName: v.colorName.trim(),
+              colorHex: v.colorHex || '#142B22',
+              stock: Number(v.stock ?? 1),
+              image: vUrls[0] || '',
+              images: vUrls,
+            };
+          });
+      }
+    }
+
+    const totalRemaining =
+      (bag.stock ?? 0) +
+      (bag.variants || []).reduce((sum, v) => sum + (v.stock ?? 0), 0);
+    bag.inStock = totalRemaining > 0;
+
+    await bag.save();
+    res.json(bag);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
