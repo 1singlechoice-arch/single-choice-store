@@ -23,16 +23,8 @@ import StaffPortal from './components/StaffPortal';
 import AuthModal from './components/AuthModal';
 import { apiRequest } from './utils/api';
 
-const LAGOS_AREAS = [
-  'Victoria Island',
-  'Ikoyi',
-  'Lekki Phase 1',
-  'Lekki (Other / Chevron / Ajah)',
-  'Ikeja GRA / Ikeja',
-  'Surulere',
-  'Yaba',
-  'Mainland (Other)',
-];
+const BAG_WEIGHT_KG = 3;
+const GEOAPIFY_API_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY || '';
 
 const isStaffRole = (role) => role === 'admin' || role === 'staff';
 
@@ -56,9 +48,23 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
 
-  const [deliveryArea, setDeliveryArea] = useState(LAGOS_AREAS[0]);
+  // Nationwide Nigeria Delivery & Sendbox Quote State (no visual map)
+  const [deliveryState, setDeliveryState] = useState('');
+  const [deliveryCity, setDeliveryCity] = useState('');
+  const [deliveryArea, setDeliveryArea] = useState('');
   const [streetAddress, setStreetAddress] = useState('');
   const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [coords, setCoords] = useState({ lat: null, lon: null });
+
+  const [locationQuery, setLocationQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  const [shippingQuotes, setShippingQuotes] = useState([]);
+  const [selectedCourier, setSelectedCourier] = useState(null);
+  const [loadingRates, setLoadingRates] = useState(false);
+  const [ratesError, setRatesError] = useState('');
+
   const [checkingOut, setCheckingOut] = useState(false);
 
   const [selectedBag, setSelectedBag] = useState(null);
@@ -230,6 +236,162 @@ export default function App() {
     };
   }, [token, user?.role, loadCart, loadOrders, showToast]);
 
+  const isStaff = Boolean(user && isStaffRole(user.role));
+  const totalCartItems = isStaff ? 0 : cart.reduce((sum, item) => sum + item.qty, 0);
+  const totalCartWeightKg = totalCartItems * BAG_WEIGHT_KG;
+  const cartSubtotal = isStaff ? 0 : cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
+  const selectedDeliveryFee = selectedCourier ? Number(selectedCourier.fee || 0) : 0;
+  const grandTotal = cartSubtotal + selectedDeliveryFee;
+
+  // Fetch live Sendbox courier rates whenever destination details or cart weight changes
+  const fetchCourierQuotes = useCallback(
+    async ({ addressText, stateVal, cityVal, areaVal, weightVal, latitude, longitude }) => {
+      const activeToken = token || localStorage.getItem('sc_token') || '';
+      const hasLocationSignal = Boolean(
+        (addressText && addressText.trim().length >= 3) ||
+          (stateVal && stateVal.trim().length >= 2) ||
+          (cityVal && cityVal.trim().length >= 2) ||
+          (areaVal && areaVal.trim().length >= 2)
+      );
+
+      if (!activeToken || !hasLocationSignal || weightVal <= 0) {
+        setShippingQuotes([]);
+        setSelectedCourier(null);
+        setRatesError('');
+        return;
+      }
+
+      setLoadingRates(true);
+      setRatesError('');
+      try {
+        const res = await apiRequest('/api/shipping/rates', {
+          token: activeToken,
+          method: 'POST',
+          body: JSON.stringify({
+            destinationAddress: addressText || [areaVal, cityVal, stateVal].filter(Boolean).join(', '),
+            state: stateVal || '',
+            city: cityVal || '',
+            area: areaVal || '',
+            weightKg: weightVal,
+            lat: latitude,
+            lon: longitude,
+          }),
+        });
+
+        const quotes = Array.isArray(res?.quotes) ? res.quotes : [];
+        setShippingQuotes(quotes);
+        if (quotes.length > 0) {
+          setSelectedCourier((prev) => {
+            if (prev) {
+              const matching = quotes.find((q) => q.id === prev.id || q.courierName === prev.courierName);
+              if (matching) return matching;
+            }
+            return quotes[0];
+          });
+        } else {
+          setSelectedCourier(null);
+        }
+      } catch (err) {
+        setRatesError(err.message || 'Could not fetch courier rates right now.');
+      } finally {
+        setLoadingRates(false);
+      }
+    },
+    [token]
+  );
+
+  // Instant Geoapify Autocomplete across Nigeria (no visual map)
+  useEffect(() => {
+    const query = locationQuery.trim();
+    if (!checkoutOpen || query.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    if (!GEOAPIFY_API_KEY) {
+      setSuggestions([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingSuggestions(true);
+        const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(
+          query
+        )}&filter=countrycode:ng&limit=6&apiKey=${encodeURIComponent(GEOAPIFY_API_KEY)}`;
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) return;
+        const data = await response.json();
+        const features = Array.isArray(data?.features) ? data.features : [];
+        setSuggestions(
+          features.map((feat, idx) => {
+            const props = feat.properties || {};
+            return {
+              id: props.place_id || `${idx}-${props.formatted || query}`,
+              formatted: props.formatted || query,
+              state: props.state || '',
+              city: props.city || props.county || props.suburb || '',
+              area: props.suburb || props.district || props.neighbourhood || props.name || '',
+              lat: typeof props.lat === 'number' ? props.lat : null,
+              lon: typeof props.lon === 'number' ? props.lon : null,
+            };
+          })
+        );
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Geoapify autocomplete error:', err);
+        }
+      } finally {
+        setLoadingSuggestions(false);
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [locationQuery, checkoutOpen]);
+
+  // Recalculate shipping fee automatically whenever state/city/area or cart weight updates
+  useEffect(() => {
+    if (!checkoutOpen) return;
+    const timer = setTimeout(() => {
+      fetchCourierQuotes({
+        addressText: streetAddress || locationQuery,
+        stateVal: deliveryState,
+        cityVal: deliveryCity,
+        areaVal: deliveryArea,
+        weightVal: totalCartWeightKg,
+        latitude: coords.lat,
+        longitude: coords.lon,
+      });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [
+    checkoutOpen,
+    streetAddress,
+    locationQuery,
+    deliveryState,
+    deliveryCity,
+    deliveryArea,
+    totalCartWeightKg,
+    coords.lat,
+    coords.lon,
+    fetchCourierQuotes,
+  ]);
+
+  const handleSelectSuggestion = (item) => {
+    setLocationQuery(item.formatted);
+    setStreetAddress(item.formatted);
+    setDeliveryState(item.state || deliveryState);
+    setDeliveryCity(item.city || deliveryCity);
+    setDeliveryArea(item.area || item.city || item.state || deliveryArea);
+    setCoords({ lat: item.lat, lon: item.lon });
+    setSuggestions([]);
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('sc_token');
     setToken('');
@@ -341,15 +503,29 @@ export default function App() {
       return;
     }
     if (cart.length === 0) return;
+
+    const finalAddress = (streetAddress || locationQuery).trim();
+    const finalArea = [deliveryArea, deliveryCity, deliveryState].filter(Boolean).join(', ') || locationQuery.trim();
+
+    if (!finalAddress || !finalArea) {
+      showToast('Please enter your destination state, city, area, and street address.', 'error');
+      return;
+    }
+
     setCheckingOut(true);
     try {
       const data = await apiRequest('/api/checkout/initialize', {
         token,
         method: 'POST',
         body: JSON.stringify({
-          area: deliveryArea,
-          streetAddress: streetAddress.trim(),
+          area: finalArea,
+          city: deliveryCity.trim(),
+          state: deliveryState.trim(),
+          streetAddress: finalAddress,
           phone: deliveryPhone.trim(),
+          selectedCourier,
+          lat: coords.lat,
+          lon: coords.lon,
         }),
       });
 
@@ -360,7 +536,7 @@ export default function App() {
         return;
       }
 
-      showToast('Order placed successfully! Awaiting bank transfer confirmation.');
+      showToast('Order placed successfully! Awaiting payment confirmation.');
       setCartOpen(false);
       setCheckoutOpen(false);
       loadCart(token, user?.role);
@@ -400,10 +576,6 @@ export default function App() {
       bag.colorName?.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCol && matchesSearch;
   });
-
-  const isStaff = Boolean(user && isStaffRole(user.role));
-  const totalCartItems = isStaff ? 0 : cart.reduce((sum, item) => sum + item.qty, 0);
-  const cartSubtotal = isStaff ? 0 : cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
 
   const activeBagPresentation = selectedBag
     ? (() => {
@@ -717,7 +889,7 @@ export default function App() {
               <div className="empty-state-card">
                 <Package size={36} strokeWidth={1.3} />
                 <h3>No Orders Placed Yet</h3>
-                <p>Explore our latest luxury handbag arrivals curated in Lagos.</p>
+                <p>Explore our latest luxury handbag arrivals with nationwide Nigeria delivery.</p>
                 <button
                   type="button"
                   className="btn-primary"
@@ -768,10 +940,11 @@ export default function App() {
                         <MapPin size={14} />
                         <span>
                           {order.delivery?.streetAddress}, {order.delivery?.area}
+                          {order.delivery?.courierName ? ` • ${order.delivery.courierName}` : ''}
                         </span>
                       </div>
                       <div className="order-total">
-                        Total: <strong>₦{order.totalAmount.toLocaleString()}</strong>
+                        Total: <strong>₦{Number(order.totalAmount || 0).toLocaleString()}</strong>
                       </div>
                     </div>
                   </div>
@@ -811,8 +984,8 @@ export default function App() {
                     marginBottom: '28px',
                   }}
                 >
-                  Need styling advice, additional close-up videos of a piece, or urgent same-day
-                  Lagos dispatch assistance? Reach out directly to our boutique concierge.
+                  Need styling advice, additional close-up videos of a piece, or nationwide dispatch
+                  assistance across Nigeria? Reach out directly to our boutique concierge.
                 </p>
 
                 <div
@@ -837,10 +1010,10 @@ export default function App() {
                     <MapPin size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
-                        Lagos Boutique &amp; Dispatch Hub
+                        Nationwide Nigeria Dispatch
                       </strong>
                       <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
-                        Victoria Island &amp; Lekki Dispatch Network, Lagos
+                        Dispatched from Amikanle, Lagos across all states in Nigeria
                       </span>
                     </div>
                   </div>
@@ -1206,8 +1379,8 @@ export default function App() {
           <div>
             <div className="footer-brand">SINGLE CHOICE</div>
             <p className="footer-tagline">
-              Luxury handbags curated in Lagos with insured same-day dispatch across Victoria
-              Island, Ikoyi, Lekki, and Ikeja.
+              Luxury handbags delivered nationwide across Nigeria with live courier rate shopping
+              and secure Paystack checkout.
             </p>
           </div>
 
@@ -1399,7 +1572,7 @@ export default function App() {
                 <div className="stock-status-line">
                   {activeBagPresentation.stock > 0 ? (
                     <span style={{ fontSize: '13px', color: 'var(--success)', fontWeight: '500' }}>
-                      ✓ In Stock ({activeBagPresentation.stock} ready for dispatch)
+                      ✓ In Stock ({activeBagPresentation.stock} ready for nationwide dispatch)
                     </span>
                   ) : (
                     <span style={{ fontSize: '13px', color: 'var(--danger)', fontWeight: '500' }}>
@@ -1573,20 +1746,31 @@ export default function App() {
                   >
                     ← Back to Bag Items
                   </button>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Est. Weight: <strong>{totalCartWeightKg} kg</strong>
+                  </span>
                 </div>
 
-                <h4>Lagos Dispatch Details</h4>
+                <h4>Nationwide Nigeria Dispatch Details</h4>
                 <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                  Complete your handbag payment securely via Paystack. Our team will send your
-                  exact rider fee &amp; pickup code after.
+                  We deliver across all states in Nigeria. Start typing your location below to see
+                  instant suggestions and live courier rates.
                 </p>
 
-                <div className="form-group">
-                  <label>Delivery Area *</label>
-                  <select
-                    value={deliveryArea}
-                    onChange={(e) => setDeliveryArea(e.target.value)}
-                    required
+                {/* Instant Autocomplete Location Search Across Nigeria (No Visual Map) */}
+                <div className="form-group" style={{ position: 'relative' }}>
+                  <label>Search Location in Nigeria (State, City, Area) *</label>
+                  <input
+                    type="text"
+                    value={locationQuery}
+                    onChange={(e) => {
+                      setLocationQuery(e.target.value);
+                      if (!streetAddress) {
+                        setStreetAddress(e.target.value);
+                      }
+                    }}
+                    placeholder="Type state, city, or street in Nigeria..."
+                    autoComplete="off"
                     style={{
                       border: '1px solid var(--border-subtle)',
                       background: 'var(--bg-alabaster)',
@@ -1594,13 +1778,92 @@ export default function App() {
                       fontSize: '14px',
                       width: '100%',
                     }}
-                  >
-                    {LAGOS_AREAS.map((area) => (
-                      <option key={area} value={area}>
-                        {area}
-                      </option>
-                    ))}
-                  </select>
+                  />
+
+                  {loadingSuggestions && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      Searching locations across Nigeria...
+                    </div>
+                  )}
+
+                  {suggestions.length > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        background: '#FFFFFF',
+                        border: '1px solid var(--border-subtle)',
+                        boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+                        zIndex: 50,
+                        maxHeight: '210px',
+                        overflowY: 'auto',
+                      }}
+                    >
+                      {suggestions.map((sug) => (
+                        <button
+                          key={sug.id}
+                          type="button"
+                          onClick={() => handleSelectSuggestion(sug)}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '10px 12px',
+                            background: '#FFFFFF',
+                            border: 'none',
+                            borderBottom: '1px solid var(--border-subtle)',
+                            fontSize: '13px',
+                            color: 'var(--forest-green)',
+                            cursor: 'pointer',
+                            display: 'block',
+                          }}
+                        >
+                          {sug.formatted}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>State *</label>
+                    <input
+                      type="text"
+                      required
+                      value={deliveryState}
+                      onChange={(e) => setDeliveryState(e.target.value)}
+                      placeholder="e.g. Lagos, Abuja, Rivers"
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-alabaster)',
+                        padding: '10px 12px',
+                        fontSize: '13.5px',
+                        width: '100%',
+                      }}
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>City / Area *</label>
+                    <input
+                      type="text"
+                      required
+                      value={deliveryCity || deliveryArea}
+                      onChange={(e) => {
+                        setDeliveryCity(e.target.value);
+                        setDeliveryArea(e.target.value);
+                      }}
+                      placeholder="e.g. Ikeja, Wuse II, GRA"
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-alabaster)',
+                        padding: '10px 12px',
+                        fontSize: '13.5px',
+                        width: '100%',
+                      }}
+                    />
+                  </div>
                 </div>
 
                 <div className="form-group">
@@ -1610,7 +1873,7 @@ export default function App() {
                     required
                     value={streetAddress}
                     onChange={(e) => setStreetAddress(e.target.value)}
-                    placeholder="House/Flat number, Street name, Estate"
+                    placeholder="House/Flat number, Street name, Landmark"
                     style={{
                       border: '1px solid var(--border-subtle)',
                       background: 'var(--bg-alabaster)',
@@ -1639,6 +1902,75 @@ export default function App() {
                   />
                 </div>
 
+                {/* Live Sendbox Courier Quotes */}
+                <div
+                  style={{
+                    background: 'var(--bg-alabaster)',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12.5px', fontWeight: '700', color: 'var(--forest-green)' }}>
+                    Courier Delivery Options ({totalCartWeightKg} kg total)
+                  </div>
+
+                  {loadingRates ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                      Calculating live courier rates across Nigeria...
+                    </div>
+                  ) : ratesError ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--danger)' }}>{ratesError}</div>
+                  ) : shippingQuotes.length === 0 ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                      Enter your destination state, city, or street address to calculate delivery fee.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {shippingQuotes.map((quote) => {
+                        const isChosen =
+                          selectedCourier?.id === quote.id ||
+                          selectedCourier?.courierName === quote.courierName;
+                        return (
+                          <button
+                            key={quote.id}
+                            type="button"
+                            onClick={() => setSelectedCourier(quote)}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '10px 12px',
+                              background: isChosen ? '#FFFFFF' : 'transparent',
+                              border: isChosen
+                                ? '1.5px solid var(--forest-green)'
+                                : '1px solid var(--border-subtle)',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              width: '100%',
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--forest-green)' }}>
+                                {quote.courierName}
+                              </div>
+                              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                                {quote.eta}
+                              </div>
+                            </div>
+                            <strong style={{ fontSize: '13.5px', color: 'var(--forest-green)' }}>
+                              ₦{Number(quote.fee).toLocaleString()}
+                            </strong>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Billing Summary */}
                 <div
                   style={{
                     background: 'var(--bg-alabaster)',
@@ -1654,12 +1986,34 @@ export default function App() {
                     <span>Handbags Subtotal</span>
                     <strong>₦{cartSubtotal.toLocaleString()}</strong>
                   </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      Delivery Fee {selectedCourier ? `(${selectedCourier.courierName})` : ''}
+                    </span>
+                    <strong>₦{selectedDeliveryFee.toLocaleString()}</strong>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      paddingTop: '8px',
+                      borderTop: '1px solid var(--border-subtle)',
+                      fontSize: '15px',
+                    }}
+                  >
+                    <strong>Total Billing</strong>
+                    <strong>₦{grandTotal.toLocaleString()}</strong>
+                  </div>
                 </div>
 
-                <button type="submit" className="btn-primary full-width" disabled={checkingOut}>
+                <button
+                  type="submit"
+                  className="btn-primary full-width"
+                  disabled={checkingOut || loadingRates}
+                >
                   {checkingOut
                     ? 'Redirecting to Paystack...'
-                    : `Proceed to Paystack — ₦${cartSubtotal.toLocaleString()}`}
+                    : `Proceed to Paystack — ₦${grandTotal.toLocaleString()}`}
                 </button>
               </form>
             ) : (

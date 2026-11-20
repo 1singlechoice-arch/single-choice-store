@@ -25,6 +25,14 @@ const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const DEFAULT_BAG_WEIGHT_KG = Number(process.env.DEFAULT_BAG_WEIGHT_KG) || 3;
+const PICKUP_CONFIG = {
+  address: (process.env.PICKUP_ADDRESS || 'No. 1 Ifelodun, Community Road, Amikanle, Lagos').trim(),
+  city: (process.env.PICKUP_CITY || 'Lagos').trim(),
+  state: (process.env.PICKUP_STATE || 'Lagos').trim(),
+  country: 'Nigeria',
+};
+
 const allowedOrigins = [
   process.env.CLIENT_URL,
   'https://www.singlechoice.ng',
@@ -54,6 +62,11 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'Single Choice API' });
+});
+
+app.post('/api/webhooks/sendbox', (req, res) => {
+  console.log('Sendbox webhook event received:', req.body);
+  res.status(200).json({ received: true });
 });
 
 cloudinary.config({
@@ -179,15 +192,196 @@ const sendOrderEmails = async (order, customer, stage = 'placed') => {
     )
     .join('\n');
 
+  const deliveryFee = Number(order.delivery?.fee ?? order.deliveryFee ?? 0);
+  const courierText = order.delivery?.courierName ? `\nCourier: ${order.delivery.courierName}` : '';
+
   setImmediate(() => {
     sendBrevoEmail({
       toEmail: boutiqueEmail,
       toName: 'Single Choice Concierge',
       replyTo: customer.email,
       subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
-      textContent: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}\n\nItems:\n${itemsText}\n\nTotal: ₦${order.totalAmount.toLocaleString()}`,
+      textContent: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}${courierText}\n\nItems:\n${itemsText}\n\nSubtotal: ₦${Number(order.subtotal || 0).toLocaleString()}\nDelivery Fee: ₦${deliveryFee.toLocaleString()}\nTotal: ₦${Number(order.totalAmount || 0).toLocaleString()}`,
     }).catch((err) => console.error('Admin order email error:', err.message));
   });
+};
+
+const buildFallbackNigeriaQuotes = ({ state, weightKg }) => {
+  const normalizedState = (state || '').trim().toLowerCase();
+  const safeWeight = Math.max(1, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
+  const weightMultiplier = Math.max(1, Math.ceil(safeWeight / 3));
+
+  const isLagos = normalizedState.includes('lagos');
+  const isSouthWest = ['ogun', 'oyo', 'osun', 'ondo', 'ekiti'].some((s) =>
+    normalizedState.includes(s)
+  );
+  const isAbujaOrMajorHub = ['abuja', 'fct', 'rivers', 'kano', 'enugu', 'edo', 'delta', 'anambra'].some(
+    (s) => normalizedState.includes(s)
+  );
+
+  let baseStandard = 8500;
+  let standardEta = '2 - 4 business days';
+  let expressDelta = 3500;
+  let expressEta = '1 - 2 business days';
+
+  if (isLagos) {
+    baseStandard = 3500;
+    standardEta = 'Same day / Next day';
+    expressDelta = 2000;
+    expressEta = 'Same day express';
+  } else if (isSouthWest) {
+    baseStandard = 5500;
+    standardEta = '1 - 2 business days';
+    expressDelta = 2500;
+    expressEta = '1 business day';
+  } else if (isAbujaOrMajorHub) {
+    baseStandard = 7500;
+    standardEta = '2 - 3 business days';
+    expressDelta = 3000;
+    expressEta = '1 - 2 business days';
+  }
+
+  const standardFee = Math.round((baseStandard * weightMultiplier) / 100) * 100;
+  const expressFee = Math.round(((baseStandard + expressDelta) * weightMultiplier) / 100) * 100;
+
+  return [
+    {
+      id: 'gig-standard',
+      courierName: 'GIG Logistics',
+      serviceName: 'Standard Nationwide Dispatch',
+      fee: standardFee,
+      eta: standardEta,
+      isFallback: true,
+    },
+    {
+      id: 'dhl-express',
+      courierName: 'DHL Express Nigeria',
+      serviceName: 'Priority Courier',
+      fee: expressFee,
+      eta: expressEta,
+      isFallback: true,
+    },
+    {
+      id: 'redstar-standard',
+      courierName: 'Red Star Express',
+      serviceName: 'Nationwide Delivery',
+      fee: Math.round(((baseStandard + 1200) * weightMultiplier) / 100) * 100,
+      eta: standardEta,
+      isFallback: true,
+    },
+  ];
+};
+
+const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weightKg, lat, lon }) => {
+  const apiKey = (process.env.SENDBOX_API_KEY || '').trim();
+  const baseUrl = (process.env.SENDBOX_BASE_URL || 'https://live.sendbox.co').trim().replace(/\/+$/, '');
+  const cleanWeight = Math.max(0.5, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
+
+  const fullDestination = [destinationAddress, area, city, state, 'Nigeria']
+    .map((part) => (part || '').trim())
+    .filter(Boolean)
+    .join(', ');
+
+  if (!apiKey) {
+    return {
+      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      source: 'estimated_fallback',
+    };
+  }
+
+  try {
+    const payload = {
+      origin_name: 'Single Choice',
+      origin_street_address: PICKUP_CONFIG.address,
+      origin_city: PICKUP_CONFIG.city,
+      origin_state: PICKUP_CONFIG.state,
+      origin_country: PICKUP_CONFIG.country,
+      destination_name: 'Customer Delivery',
+      destination_street_address: fullDestination,
+      destination_city: (city || area || state || 'Lagos').trim(),
+      destination_state: (state || 'Lagos').trim(),
+      destination_country: 'Nigeria',
+      ...(typeof lat === 'number' && !Number.isNaN(lat) ? { destination_lat: lat } : {}),
+      ...(typeof lon === 'number' && !Number.isNaN(lon) ? { destination_lon: lon } : {}),
+      weight: cleanWeight,
+      weight_unit: 'kg',
+      items: [
+        {
+          name: 'Luxury Handbag',
+          quantity: Math.max(1, Math.round(cleanWeight / DEFAULT_BAG_WEIGHT_KG)),
+          weight: cleanWeight,
+          weight_unit: 'kg',
+        },
+      ],
+    };
+
+    const response = await axios.post(`${baseUrl}/api/v1/merchant/shipments/delivery_quote`, payload, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 12000,
+    });
+
+    const rawList =
+      response.data?.rates ||
+      response.data?.quotes ||
+      response.data?.data?.rates ||
+      response.data?.data?.quotes ||
+      (Array.isArray(response.data?.data) ? response.data.data : []);
+
+    const normalizedQuotes = (Array.isArray(rawList) ? rawList : [])
+      .map((q, index) => {
+        const rawFee =
+          q?.fee ?? q?.amount ?? q?.total ?? q?.delivery_fee ?? q?.rate ?? q?.price ?? null;
+        const numericFee = Number(rawFee);
+        if (!Number.isFinite(numericFee) || numericFee <= 0) return null;
+
+        const courierName =
+          q?.courier_name ||
+          q?.courier?.name ||
+          q?.carrier_name ||
+          q?.name ||
+          `Courier Option ${index + 1}`;
+        const serviceName = q?.service_name || q?.service_type || q?.mode || 'Courier Delivery';
+        const eta =
+          q?.eta ||
+          q?.delivery_time ||
+          q?.duration ||
+          q?.estimated_delivery ||
+          '1 - 4 business days';
+
+        return {
+          id: String(q?.id || q?.quote_id || q?.service_code || `${courierName}-${index}`),
+          courierName: String(courierName).trim(),
+          serviceName: String(serviceName).trim(),
+          fee: Math.round(numericFee),
+          eta: String(eta).trim(),
+          raw: q,
+        };
+      })
+      .filter(Boolean);
+
+    if (normalizedQuotes.length > 0) {
+      normalizedQuotes.sort((a, b) => a.fee - b.fee);
+      return {
+        quotes: normalizedQuotes,
+        source: 'sendbox_live',
+      };
+    }
+
+    return {
+      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      source: 'estimated_fallback',
+    };
+  } catch (err) {
+    console.warn('Sendbox rate lookup fallback triggered:', err.response?.data || err.message);
+    return {
+      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      source: 'estimated_fallback',
+    };
+  }
 };
 
 const fulfillPaidOrder = async (reference) => {
@@ -781,17 +975,90 @@ app.delete('/api/cart/:bagId', protect, customerOnly, async (req, res) => {
   res.json(updated.cart.filter((item) => item.bag !== null));
 });
 
+// Live Nationwide Sendbox Courier Rate Shopping
+app.post('/api/shipping/rates', protect, customerOnly, async (req, res) => {
+  try {
+    const { destinationAddress, state, city, area, weightKg, lat, lon } = req.body;
+    if (!String(destinationAddress || area || city || state || '').trim()) {
+      return res.status(400).json({ message: 'Please enter a destination location in Nigeria.' });
+    }
+
+    const user = await User.findById(req.user._id).populate('cart.bag');
+    const validItems = (user?.cart || []).filter((i) => i.bag !== null);
+    const totalItemQty = validItems.reduce((sum, i) => sum + Number(i.qty || 1), 0);
+    const calculatedWeightKg =
+      Number(weightKg) > 0
+        ? Number(weightKg)
+        : Math.max(DEFAULT_BAG_WEIGHT_KG, totalItemQty * DEFAULT_BAG_WEIGHT_KG);
+
+    const result = await fetchSendboxQuotes({
+      destinationAddress,
+      state,
+      city,
+      area,
+      weightKg: calculatedWeightKg,
+      lat,
+      lon,
+    });
+
+    res.json({
+      pickup: PICKUP_CONFIG,
+      weightKg: calculatedWeightKg,
+      source: result.source,
+      quotes: result.quotes,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Unable to fetch shipping quotes.' });
+  }
+});
+
 app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => {
   try {
-    const { area, streetAddress, phone } = req.body;
+    const {
+      area,
+      city,
+      state,
+      streetAddress,
+      phone,
+      selectedCourier,
+      lat,
+      lon,
+    } = req.body;
+
     const user = await User.findById(req.user._id).populate('cart.bag');
     const validItems = user.cart.filter((i) => i.bag !== null);
     if (validItems.length === 0) return res.status(400).json({ message: 'Cart is empty.' });
 
+    const totalItemQty = validItems.reduce((sum, i) => sum + Number(i.qty || 1), 0);
+    const weightKg = Math.max(DEFAULT_BAG_WEIGHT_KG, totalItemQty * DEFAULT_BAG_WEIGHT_KG);
+
+    const quoteResult = await fetchSendboxQuotes({
+      destinationAddress: streetAddress,
+      state: state || area,
+      city: city || area,
+      area: area || city || state || 'Nigeria',
+      weightKg,
+      lat,
+      lon,
+    });
+
+    const quotes = quoteResult.quotes;
+    const matchedQuote =
+      quotes.find(
+        (q) =>
+          (selectedCourier?.id && q.id === selectedCourier.id) ||
+          (selectedCourier?.courierName &&
+            q.courierName.toLowerCase() === String(selectedCourier.courierName).toLowerCase())
+      ) || quotes[0];
+
     const subtotal = validItems.reduce((sum, i) => sum + i.bag.price * i.qty, 0);
-    const deliveryFee = 0; // Rider fee is confirmed after order placement
+    const deliveryFee = matchedQuote ? Number(matchedQuote.fee) : 0;
+    const courierName = matchedQuote?.courierName || selectedCourier?.courierName || 'Standard Dispatch';
+    const courierEta = matchedQuote?.eta || selectedCourier?.eta || '';
     const totalAmount = subtotal + deliveryFee;
     const reference = 'SC_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+
+    const formattedArea = [area, city, state].filter(Boolean).join(', ') || 'Nigeria';
 
     const createdOrder = await Order.create({
       customer: user._id,
@@ -801,12 +1068,16 @@ app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => 
         qty: i.qty,
       })),
       delivery: {
-        area,
+        area: formattedArea,
         streetAddress,
         phone,
         fee: deliveryFee,
+        courierName,
+        eta: courierEta,
+        weightKg,
       },
       subtotal,
+      deliveryFee,
       totalAmount,
       paystackReference: reference,
     });
@@ -814,7 +1085,14 @@ app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => 
     await sendOrderEmails(createdOrder, user, 'placed');
 
     if (!process.env.PAYSTACK_SECRET_KEY) {
-      return res.json({ authorization_url: '#', reference, subtotal, deliveryFee, totalAmount });
+      return res.json({
+        authorization_url: '#',
+        reference,
+        subtotal,
+        deliveryFee,
+        courierName,
+        totalAmount,
+      });
     }
 
     const rawClientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/+$/, '');
@@ -845,6 +1123,7 @@ app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => 
       reference,
       subtotal,
       deliveryFee,
+      courierName,
       totalAmount,
     });
   } catch (err) {
