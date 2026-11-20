@@ -31,6 +31,8 @@ const PICKUP_CONFIG = {
   city: (process.env.PICKUP_CITY || 'Lagos').trim(),
   state: (process.env.PICKUP_STATE || 'Lagos').trim(),
   country: 'Nigeria',
+  lat: Number(process.env.PICKUP_LAT) || 6.652,
+  lon: Number(process.env.PICKUP_LON) || 3.249,
 };
 
 const allowedOrigins = [
@@ -47,7 +49,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser requests (like curl/health checks) or allowlisted origins
       const normalizedOrigin = origin ? origin.trim().replace(/\/+$/, '') : '';
       if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
@@ -206,26 +207,111 @@ const sendOrderEmails = async (order, customer, stage = 'placed') => {
   });
 };
 
-const buildFallbackNigeriaQuotes = ({ state, weightKg }) => {
-  const normalizedState = (state || '').trim().toLowerCase();
-  const safeWeight = Math.max(1, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
-  const weightMultiplier = Math.max(1, Math.ceil(safeWeight / 3));
+const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+  if (
+    lat1 === null || lat1 === undefined || lat1 === '' ||
+    lon1 === null || lon1 === undefined || lon1 === '' ||
+    lat2 === null || lat2 === undefined || lat2 === '' ||
+    lon2 === null || lon2 === undefined || lon2 === ''
+  ) {
+    return null;
+  }
 
-  const isLagos = normalizedState.includes('lagos');
-  const isSouthWest = ['ogun', 'oyo', 'osun', 'ondo', 'ekiti'].some((s) =>
-    normalizedState.includes(s)
-  );
-  const isAbujaOrMajorHub = ['abuja', 'fct', 'rivers', 'kano', 'enugu', 'edo', 'delta', 'anambra'].some(
-    (s) => normalizedState.includes(s)
+  const nLat1 = Number(lat1);
+  const nLon1 = Number(lon1);
+  const nLat2 = Number(lat2);
+  const nLon2 = Number(lon2);
+
+  if (!Number.isFinite(nLat1) || !Number.isFinite(nLon1) || !Number.isFinite(nLat2) || !Number.isFinite(nLon2)) {
+    return null;
+  }
+
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(nLat2 - nLat1);
+  const dLon = toRad(nLon2 - nLon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(nLat1)) * Math.cos(toRad(nLat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+const buildFallbackNigeriaQuotes = ({ destinationAddress, city, area, state, weightKg, lat, lon }) => {
+  const combinedLocation = `${destinationAddress || ''} ${area || ''} ${city || ''} ${state || ''}`
+    .trim()
+    .toLowerCase();
+  const safeWeight = Math.max(0.5, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
+  const weightMultiplier = Math.max(1, Math.ceil(safeWeight / DEFAULT_BAG_WEIGHT_KG));
+
+  const hasValidCoords =
+    lat !== null &&
+    lat !== undefined &&
+    lat !== '' &&
+    lon !== null &&
+    lon !== undefined &&
+    lon !== '';
+
+  const distanceKm = hasValidCoords
+    ? calculateDistanceKm(PICKUP_CONFIG.lat, PICKUP_CONFIG.lon, lat, lon)
+    : null;
+
+  const isLagos =
+    combinedLocation.includes('lagos') ||
+    ['ikeja', 'lekki', 'victoria island', 'yaba', 'surulere', 'ajah', 'amikanle', 'ikorodu', 'badagry', 'epe', 'agege', 'alimosho', 'ogba', 'maryland'].some(
+      (loc) => combinedLocation.includes(loc)
+    );
+
+  const isSouthWest = ['ogun', 'abeokuta', 'oyo', 'ibadan', 'osun', 'osogbo', 'ondo', 'akure', 'ekiti', 'ado-ekiti'].some(
+    (loc) => combinedLocation.includes(loc)
   );
 
-  let baseStandard = 8500;
+  const isSouthSouthOrSouthEast = [
+    'rivers', 'port harcourt', 'edo', 'benin', 'delta', 'asaba', 'warri',
+    'anambra', 'awka', 'onitsha', 'enugu', 'imo', 'owerri', 'abia', 'aba', 'umuahia',
+    'akwa ibom', 'uyo', 'cross river', 'calabar', 'bayelsa', 'yenagoa',
+  ].some((loc) => combinedLocation.includes(loc));
+
+  const isAbujaOrNorth = [
+    'abuja', 'fct', 'wuse', 'maitama', 'garki', 'gwagwalada',
+    'kano', 'kaduna', 'niger', 'minna', 'kwara', 'ilorin', 'plateau', 'jos',
+    'bauchi', 'gombe', 'adamawa', 'yola', 'borno', 'maiduguri', 'sokoto', 'katsina', 'zamfara', 'kebbi', 'jigawa', 'taraba', 'yobe', 'kogi', 'benue', 'nasarawa',
+  ].some((loc) => combinedLocation.includes(loc));
+
+  let baseStandard = 9500;
   let standardEta = '2 - 4 business days';
   let expressDelta = 3500;
   let expressEta = '1 - 2 business days';
 
-  if (isLagos) {
-    baseStandard = 3500;
+  if (distanceKm !== null) {
+    if (distanceKm <= 25) {
+      baseStandard = 2500;
+      standardEta = 'Same day / Next day';
+      expressDelta = 1500;
+      expressEta = 'Same day express';
+    } else if (distanceKm <= 65) {
+      baseStandard = 4000;
+      standardEta = 'Same day / Next day';
+      expressDelta = 2000;
+      expressEta = 'Same day express';
+    } else if (distanceKm <= 220) {
+      baseStandard = 5800;
+      standardEta = '1 - 2 business days';
+      expressDelta = 2500;
+      expressEta = '1 business day';
+    } else if (distanceKm <= 550) {
+      baseStandard = 7800;
+      standardEta = '2 - 3 business days';
+      expressDelta = 3000;
+      expressEta = '1 - 2 business days';
+    } else {
+      baseStandard = 9800;
+      standardEta = '2 - 4 business days';
+      expressDelta = 3500;
+      expressEta = '1 - 2 business days';
+    }
+  } else if (isLagos) {
+    baseStandard = 3000;
     standardEta = 'Same day / Next day';
     expressDelta = 2000;
     expressEta = 'Same day express';
@@ -234,10 +320,15 @@ const buildFallbackNigeriaQuotes = ({ state, weightKg }) => {
     standardEta = '1 - 2 business days';
     expressDelta = 2500;
     expressEta = '1 business day';
-  } else if (isAbujaOrMajorHub) {
+  } else if (isSouthSouthOrSouthEast) {
     baseStandard = 7500;
     standardEta = '2 - 3 business days';
     expressDelta = 3000;
+    expressEta = '1 - 2 business days';
+  } else if (isAbujaOrNorth) {
+    baseStandard = 9000;
+    standardEta = '2 - 4 business days';
+    expressDelta = 3500;
     expressEta = '1 - 2 business days';
   }
 
@@ -284,7 +375,15 @@ const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weigh
 
   if (!apiKey) {
     return {
-      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      quotes: buildFallbackNigeriaQuotes({
+        destinationAddress,
+        city,
+        area,
+        state,
+        weightKg: cleanWeight,
+        lat,
+        lon,
+      }),
       source: 'estimated_fallback',
     };
   }
@@ -372,13 +471,29 @@ const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weigh
     }
 
     return {
-      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      quotes: buildFallbackNigeriaQuotes({
+        destinationAddress,
+        city,
+        area,
+        state,
+        weightKg: cleanWeight,
+        lat,
+        lon,
+      }),
       source: 'estimated_fallback',
     };
   } catch (err) {
     console.warn('Sendbox rate lookup fallback triggered:', err.response?.data || err.message);
     return {
-      quotes: buildFallbackNigeriaQuotes({ state, weightKg: cleanWeight }),
+      quotes: buildFallbackNigeriaQuotes({
+        destinationAddress,
+        city,
+        area,
+        state,
+        weightKg: cleanWeight,
+        lat,
+        lon,
+      }),
       source: 'estimated_fallback',
     };
   }
