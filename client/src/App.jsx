@@ -26,6 +26,22 @@ import { apiRequest } from './utils/api';
 const BAG_WEIGHT_KG = 3;
 const GEOAPIFY_API_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY || '';
 
+const NIGERIA_QUICK_LOCATIONS = [
+  { id: 'ng-ikeja', formatted: 'Ikeja, Lagos, Nigeria', state: 'Lagos', city: 'Ikeja', area: 'Ikeja', lat: 6.6018, lon: 3.3515 },
+  { id: 'ng-lekki', formatted: 'Lekki Phase 1, Lagos, Nigeria', state: 'Lagos', city: 'Lekki', area: 'Lekki Phase 1', lat: 6.4474, lon: 3.4723 },
+  { id: 'ng-vi', formatted: 'Victoria Island, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Victoria Island', lat: 6.4281, lon: 3.4219 },
+  { id: 'ng-surulere', formatted: 'Surulere, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Surulere', lat: 6.5059, lon: 3.3509 },
+  { id: 'ng-yaba', formatted: 'Yaba, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Yaba', lat: 6.5158, lon: 3.3769 },
+  { id: 'ng-ikorodu', formatted: 'Ikorodu, Lagos, Nigeria', state: 'Lagos', city: 'Ikorodu', area: 'Ikorodu', lat: 6.6194, lon: 3.5105 },
+  { id: 'ng-abeokuta', formatted: 'Abeokuta, Ogun, Nigeria', state: 'Ogun', city: 'Abeokuta', area: 'Abeokuta', lat: 7.1475, lon: 3.3619 },
+  { id: 'ng-ibadan', formatted: 'Ibadan, Oyo, Nigeria', state: 'Oyo', city: 'Ibadan', area: 'Ibadan', lat: 7.3775, lon: 3.947 },
+  { id: 'ng-abuja', formatted: 'Wuse II, Abuja, FCT, Nigeria', state: 'FCT', city: 'Abuja', area: 'Wuse II', lat: 9.0765, lon: 7.3986 },
+  { id: 'ng-ph', formatted: 'GRA, Port Harcourt, Rivers, Nigeria', state: 'Rivers', city: 'Port Harcourt', area: 'GRA', lat: 4.8156, lon: 7.0498 },
+  { id: 'ng-benin', formatted: 'Benin City, Edo, Nigeria', state: 'Edo', city: 'Benin City', area: 'Benin City', lat: 6.335, lon: 5.6037 },
+  { id: 'ng-enugu', formatted: 'Enugu, Enugu, Nigeria', state: 'Enugu', city: 'Enugu', area: 'Enugu', lat: 6.4584, lon: 7.5464 },
+  { id: 'ng-kano', formatted: 'Kano, Kano, Nigeria', state: 'Kano', city: 'Kano', area: 'Kano', lat: 12.0022, lon: 8.592 },
+];
+
 const isStaffRole = (role) => role === 'admin' || role === 'staff';
 
 export default function App() {
@@ -48,7 +64,7 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
 
-  // Nationwide Nigeria Delivery & Sendbox Quote State (no visual map)
+  // Nationwide Nigeria Delivery & Sendbox Quote State
   const [deliveryState, setDeliveryState] = useState('');
   const [deliveryCity, setDeliveryCity] = useState('');
   const [deliveryArea, setDeliveryArea] = useState('');
@@ -248,7 +264,7 @@ export default function App() {
     async ({ addressText, stateVal, cityVal, areaVal, weightVal, latitude, longitude }) => {
       const activeToken = token || localStorage.getItem('sc_token') || '';
       const hasLocationSignal = Boolean(
-        (addressText && addressText.trim().length >= 3) ||
+        (addressText && addressText.trim().length >= 2) ||
           (stateVal && stateVal.trim().length >= 2) ||
           (cityVal && cityVal.trim().length >= 2) ||
           (areaVal && areaVal.trim().length >= 2)
@@ -273,8 +289,8 @@ export default function App() {
             city: cityVal || '',
             area: areaVal || '',
             weightKg: weightVal,
-            lat: latitude,
-            lon: longitude,
+            lat: typeof latitude === 'number' ? latitude : null,
+            lon: typeof longitude === 'number' ? longitude : null,
           }),
         });
 
@@ -300,7 +316,7 @@ export default function App() {
     [token]
   );
 
-  // Instant Geoapify Autocomplete across Nigeria (no visual map)
+  // Instant Geoapify Autocomplete across Nigeria + smart local fallback when typing
   useEffect(() => {
     const query = locationQuery.trim();
     if (!checkoutOpen || query.length < 2) {
@@ -308,8 +324,12 @@ export default function App() {
       return;
     }
 
+    const localMatches = NIGERIA_QUICK_LOCATIONS.filter((loc) =>
+      loc.formatted.toLowerCase().includes(query.toLowerCase())
+    );
+
     if (!GEOAPIFY_API_KEY) {
-      setSuggestions([]);
+      setSuggestions(localMatches);
       return;
     }
 
@@ -321,31 +341,34 @@ export default function App() {
           query
         )}&filter=countrycode:ng&limit=6&apiKey=${encodeURIComponent(GEOAPIFY_API_KEY)}`;
         const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) return;
+        if (!response.ok) {
+          setSuggestions(localMatches);
+          return;
+        }
         const data = await response.json();
         const features = Array.isArray(data?.features) ? data.features : [];
-        setSuggestions(
-          features.map((feat, idx) => {
-            const props = feat.properties || {};
-            return {
-              id: props.place_id || `${idx}-${props.formatted || query}`,
-              formatted: props.formatted || query,
-              state: props.state || '',
-              city: props.city || props.county || props.suburb || '',
-              area: props.suburb || props.district || props.neighbourhood || props.name || '',
-              lat: typeof props.lat === 'number' ? props.lat : null,
-              lon: typeof props.lon === 'number' ? props.lon : null,
-            };
-          })
-        );
+        const mapped = features.map((feat, idx) => {
+          const props = feat.properties || {};
+          return {
+            id: props.place_id || `${idx}-${props.formatted || query}`,
+            formatted: props.formatted || query,
+            state: props.state || props.county || '',
+            city: props.city || props.town || props.suburb || props.district || '',
+            area: props.suburb || props.district || props.neighbourhood || props.name || '',
+            lat: typeof props.lat === 'number' ? props.lat : null,
+            lon: typeof props.lon === 'number' ? props.lon : null,
+          };
+        });
+        setSuggestions(mapped.length > 0 ? mapped : localMatches);
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error('Geoapify autocomplete error:', err);
+          setSuggestions(localMatches);
         }
       } finally {
         setLoadingSuggestions(false);
       }
-    }, 250);
+    }, 220);
 
     return () => {
       clearTimeout(timer);
@@ -353,7 +376,7 @@ export default function App() {
     };
   }, [locationQuery, checkoutOpen]);
 
-  // Recalculate shipping fee automatically whenever state/city/area or cart weight updates
+  // Recalculate shipping fee automatically whenever state/city/area, coordinates, or cart weight updates
   useEffect(() => {
     if (!checkoutOpen) return;
     const timer = setTimeout(() => {
@@ -366,7 +389,7 @@ export default function App() {
         latitude: coords.lat,
         longitude: coords.lon,
       });
-    }, 350);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [
@@ -385,9 +408,9 @@ export default function App() {
   const handleSelectSuggestion = (item) => {
     setLocationQuery(item.formatted);
     setStreetAddress(item.formatted);
-    setDeliveryState(item.state || deliveryState);
-    setDeliveryCity(item.city || deliveryCity);
-    setDeliveryArea(item.area || item.city || item.state || deliveryArea);
+    setDeliveryState(item.state || '');
+    setDeliveryCity(item.city || '');
+    setDeliveryArea(item.area || item.city || item.state || '');
     setCoords({ lat: item.lat, lon: item.lon });
     setSuggestions([]);
   };
@@ -1757,17 +1780,17 @@ export default function App() {
                   instant suggestions and live courier rates.
                 </p>
 
-                {/* Instant Autocomplete Location Search Across Nigeria (No Visual Map) */}
+                {/* Instant Autocomplete Location Search Across Nigeria */}
                 <div className="form-group" style={{ position: 'relative' }}>
                   <label>Search Location in Nigeria (State, City, Area) *</label>
                   <input
                     type="text"
                     value={locationQuery}
                     onChange={(e) => {
-                      setLocationQuery(e.target.value);
-                      if (!streetAddress) {
-                        setStreetAddress(e.target.value);
-                      }
+                      const val = e.target.value;
+                      setLocationQuery(val);
+                      setStreetAddress(val);
+                      setCoords({ lat: null, lon: null });
                     }}
                     placeholder="Type state, city, or street in Nigeria..."
                     autoComplete="off"
@@ -1833,7 +1856,10 @@ export default function App() {
                       type="text"
                       required
                       value={deliveryState}
-                      onChange={(e) => setDeliveryState(e.target.value)}
+                      onChange={(e) => {
+                        setDeliveryState(e.target.value);
+                        setCoords({ lat: null, lon: null });
+                      }}
                       placeholder="e.g. Lagos, Abuja, Rivers"
                       style={{
                         border: '1px solid var(--border-subtle)',
@@ -1853,6 +1879,7 @@ export default function App() {
                       onChange={(e) => {
                         setDeliveryCity(e.target.value);
                         setDeliveryArea(e.target.value);
+                        setCoords({ lat: null, lon: null });
                       }}
                       placeholder="e.g. Ikeja, Wuse II, GRA"
                       style={{
