@@ -1296,7 +1296,7 @@ export default function App() {
               <div className="empty-state-card">Loading collection...</div>
             ) : (
               <div className="bag-grid">
-                {bags.slice(0, 6).map((bag) => {
+                {bags.slice(0, 8).map((bag) => {
                   const totalStock = getBagTotalStock(bag);
                   const primaryColor = getBagPrimaryColor(bag);
                   const coverSrc = resolveBagImage(bag.image || bag.images?.[0]);
