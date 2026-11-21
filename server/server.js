@@ -588,8 +588,8 @@ const seedInitialData = async () => {
 // Admin Worker Management Routes
 app.get('/api/admin/workers', protect, adminOnly, async (req, res) => {
   try {
-    const workers = await User.find({ role: { $in: ['staff', 'admin'] } })
-      .select('name email role createdAt')
+    const workers = await User.find({ role: { $in: ['worker', 'staff', 'admin'] } })
+      .select('name email role isActive createdAt')
       .sort({ createdAt: -1 });
     res.json({ workers });
   } catch (err) {
@@ -608,9 +608,13 @@ app.post('/api/admin/workers', protect, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Worker email is required.' });
     }
 
+    const generatedPassword = rawPassword || `${Math.random().toString(36).slice(-8)}A1!`;
     let worker = await User.findOne({ email });
+    const isNewAccount = !worker;
+
     if (worker) {
       worker.role = role;
+      worker.isActive = true;
       worker.isVerified = true;
       if (name) worker.name = name;
       if (rawPassword) {
@@ -618,16 +622,27 @@ app.post('/api/admin/workers', protect, adminOnly, async (req, res) => {
       }
       await worker.save();
     } else {
-      const passwordToHash = rawPassword || Math.random().toString(36).slice(-10) + 'A1!';
-      const hashedPassword = await bcrypt.hash(passwordToHash, 10);
+      const hashedPassword = await bcrypt.hash(generatedPassword, 10);
       worker = await User.create({
         name: name || email.split('@')[0],
         email,
         password: hashedPassword,
         role,
+        isActive: true,
         isVerified: true,
       });
     }
+
+    setImmediate(() => {
+      sendBrevoEmail({
+        toEmail: worker.email,
+        toName: worker.name,
+        subject: 'Your Single Choice Staff Portal Access',
+        textContent: `Hi ${worker.name},\n\nYou have been granted ${role} access to the Single Choice portal at https://www.singlechoice.ng.\n\nEmail: ${worker.email}${
+          rawPassword || isNewAccount ? `\nPassword: ${generatedPassword}` : ''
+        }\n\nPlease sign in with your credentials.`,
+      }).catch((err) => console.error('Worker welcome email error:', err.message));
+    });
 
     res.status(201).json({
       worker: {
@@ -635,6 +650,7 @@ app.post('/api/admin/workers', protect, adminOnly, async (req, res) => {
         name: worker.name,
         email: worker.email,
         role: worker.role,
+        isActive: worker.isActive,
       },
     });
   } catch (err) {
@@ -664,6 +680,7 @@ app.delete('/api/admin/workers/:id', protect, adminOnly, async (req, res) => {
         name: target.name,
         email: target.email,
         role: target.role,
+        isActive: target.isActive,
       },
     });
   } catch (err) {

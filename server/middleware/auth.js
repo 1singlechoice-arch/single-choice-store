@@ -38,7 +38,11 @@ export const adminOnly = (req, res, next) => {
 };
 
 export const staffOnly = (req, res, next) => {
-  if (req.user?.role !== 'admin' && req.user?.role !== 'worker') {
+  if (
+    req.user?.role !== 'admin' &&
+    req.user?.role !== 'worker' &&
+    req.user?.role !== 'staff'
+  ) {
     return res.status(403).json({ message: 'Staff access required.' });
   }
   next();
