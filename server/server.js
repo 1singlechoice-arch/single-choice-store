@@ -501,36 +501,55 @@ const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weigh
   }
 };
 
-const fulfillPaidOrder = async (reference) => {
-  if (!reference) return null;
+// Idempotent payment & stock fulfillment (#6)
+const fulfillPaidOrder = async (reference, paidAmountKobo = null) => {
+  if (!reference) return { order: null, alreadyFulfilled: false };
 
   const existingOrder = await Order.findOne({ paystackReference: reference });
-  if (!existingOrder) return null;
+  if (!existingOrder) return { order: null, alreadyFulfilled: false };
+
   if (existingOrder.paymentStatus === 'paid' && existingOrder.fulfilledAt) {
-    return existingOrder;
+    return { order: existingOrder, alreadyFulfilled: true };
   }
 
-  const confirmedOrder = await Order.findOneAndUpdate(
+  const expectedKobo = Math.round(Number(existingOrder.totalAmount || 0) * 100);
+  if (
+    typeof paidAmountKobo === 'number' &&
+    Number.isFinite(paidAmountKobo) &&
+    expectedKobo > 0 &&
+    paidAmountKobo < expectedKobo
+  ) {
+    const mismatchOrder = await Order.findOneAndUpdate(
+      { paystackReference: reference },
+      { $set: { paymentStatus: 'amount_mismatch' } },
+      { new: true }
+    );
+    return { order: mismatchOrder, alreadyFulfilled: false, mismatch: true };
+  }
+
+  // Atomically claim fulfillment so concurrent webhook + verify calls never double-decrement stock
+  const claimedOrder = await Order.findOneAndUpdate(
     {
       paystackReference: reference,
-      $or: [{ paymentStatus: { $ne: 'paid' } }, { fulfilledAt: null }],
+      fulfilledAt: null,
     },
     {
       $set: {
         paymentStatus: 'paid',
-        fulfilledAt: existingOrder.fulfilledAt || new Date(),
+        fulfilledAt: new Date(),
       },
     },
     { new: true }
   );
 
-  if (!confirmedOrder) {
-    return Order.findOne({ paystackReference: reference });
+  if (!claimedOrder) {
+    const current = await Order.findOne({ paystackReference: reference });
+    return { order: current, alreadyFulfilled: Boolean(current?.fulfilledAt) };
   }
 
-  const user = await User.findById(confirmedOrder.customer);
+  const user = await User.findById(claimedOrder.customer);
 
-  for (const item of confirmedOrder.items || []) {
+  for (const item of claimedOrder.items || []) {
     const qtyToDeduct = Math.max(1, Number(item.qty || 1));
     const bag = item.bagId
       ? await Bag.findById(item.bagId)
@@ -594,10 +613,10 @@ const fulfillPaidOrder = async (reference) => {
   }
 
   if (user) {
-    await sendOrderEmails(confirmedOrder, user, 'paid').catch(() => {});
+    await sendOrderEmails(claimedOrder, user, 'paid').catch(() => {});
   }
 
-  return confirmedOrder;
+  return { order: claimedOrder, alreadyFulfilled: false };
 };
 
 // Paystack Webhook Endpoint (must use express.raw before express.json)
@@ -629,9 +648,10 @@ app.post(
 
       const event = JSON.parse(rawBody.toString('utf8'));
       const reference = event?.data?.reference;
+      const paidAmountKobo = typeof event?.data?.amount === 'number' ? event.data.amount : null;
 
       if (event?.event === 'charge.success' && reference) {
-        await fulfillPaidOrder(String(reference));
+        await fulfillPaidOrder(String(reference), paidAmountKobo);
       } else if (event?.event === 'charge.failed' && reference) {
         await Order.findOneAndUpdate(
           { paystackReference: String(reference), paymentStatus: 'pending' },
@@ -1625,6 +1645,7 @@ app.get('/api/checkout/verify/:reference', protect, customerOnly, async (req, re
       return res.status(404).json({ message: 'Order not found for reference.' });
     }
 
+    let paidAmountKobo = null;
     if (process.env.PAYSTACK_SECRET_KEY) {
       const verifyRes = await axios.get(
         `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
@@ -1638,9 +1659,16 @@ app.get('/api/checkout/verify/:reference', protect, customerOnly, async (req, re
       if (txStatus !== 'success') {
         return res.status(400).json({ status: txStatus || 'pending', message: 'Payment not completed yet.' });
       }
+      if (typeof verifyRes.data?.data?.amount === 'number') {
+        paidAmountKobo = verifyRes.data.data.amount;
+      }
     }
 
-    await fulfillPaidOrder(reference);
+    const result = await fulfillPaidOrder(reference, paidAmountKobo);
+    if (result?.mismatch) {
+      return res.status(400).json({ status: 'amount_mismatch', message: 'Paid amount does not match order total.' });
+    }
+
     res.json({ status: 'paid', message: 'Order confirmed successfully.' });
   } catch (err) {
     res.status(500).json({ message: err.response?.data?.message || err.message });
