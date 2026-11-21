@@ -585,6 +585,92 @@ const seedInitialData = async () => {
   }
 };
 
+// Admin Worker Management Routes
+app.get('/api/admin/workers', protect, adminOnly, async (req, res) => {
+  try {
+    const workers = await User.find({ role: { $in: ['staff', 'admin'] } })
+      .select('name email role createdAt')
+      .sort({ createdAt: -1 });
+    res.json({ workers });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Could not load workers.' });
+  }
+});
+
+app.post('/api/admin/workers', protect, adminOnly, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const role = req.body?.role === 'admin' ? 'admin' : 'staff';
+    const rawPassword = String(req.body?.password || '');
+
+    if (!email) {
+      return res.status(400).json({ message: 'Worker email is required.' });
+    }
+
+    let worker = await User.findOne({ email });
+    if (worker) {
+      worker.role = role;
+      worker.isVerified = true;
+      if (name) worker.name = name;
+      if (rawPassword) {
+        worker.password = await bcrypt.hash(rawPassword, 10);
+      }
+      await worker.save();
+    } else {
+      const passwordToHash = rawPassword || Math.random().toString(36).slice(-10) + 'A1!';
+      const hashedPassword = await bcrypt.hash(passwordToHash, 10);
+      worker = await User.create({
+        name: name || email.split('@')[0],
+        email,
+        password: hashedPassword,
+        role,
+        isVerified: true,
+      });
+    }
+
+    res.status(201).json({
+      worker: {
+        _id: worker._id,
+        name: worker.name,
+        email: worker.email,
+        role: worker.role,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ message: err.message || 'Could not add worker.' });
+  }
+});
+
+app.delete('/api/admin/workers/:id', protect, adminOnly, async (req, res) => {
+  try {
+    const target = await User.findById(req.params.id);
+    if (!target) {
+      return res.status(404).json({ message: 'Worker not found.' });
+    }
+
+    if (target._id.toString() === req.user._id.toString()) {
+      return res.status(400).json({ message: 'You cannot revoke your own admin access.' });
+    }
+
+    target.role = 'customer';
+    target.tokenVersion = (target.tokenVersion || 0) + 1;
+    await target.save();
+
+    res.json({
+      message: 'Worker access revoked.',
+      worker: {
+        _id: target._id,
+        name: target.name,
+        email: target.email,
+        role: target.role,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Could not revoke worker access.' });
+  }
+});
+
 app.post('/api/contact', async (req, res) => {
   try {
     const { name, email, phone, subject, message } = req.body;
