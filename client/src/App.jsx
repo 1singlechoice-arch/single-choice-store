@@ -44,6 +44,19 @@ const NIGERIA_QUICK_LOCATIONS = [
 
 const isStaffRole = (role) => role === 'admin' || role === 'staff';
 
+const getCartItemStock = (bag, selectedColor) => {
+  if (!bag) return 0;
+  const primaryColor = (bag.colorName || 'Classic').trim().toLowerCase();
+  const chosenColor = (selectedColor || bag.colorName || 'Classic').trim().toLowerCase();
+  if (chosenColor === primaryColor) {
+    return Math.max(0, Number(bag.stock ?? 0));
+  }
+  const variant = (bag.variants || []).find(
+    (v) => (v.colorName || '').trim().toLowerCase() === chosenColor
+  );
+  return variant ? Math.max(0, Number(variant.stock ?? 0)) : Math.max(0, Number(bag.stock ?? 0));
+};
+
 export default function App() {
   const [bags, setBags] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -236,6 +249,7 @@ export default function App() {
         if (cancelled) return;
         window.history.replaceState({}, document.title, window.location.pathname);
         showToast('Payment confirmed! Your order is now being processed.');
+        loadBags();
         loadCart(activeToken, user?.role);
         loadOrders(activeToken);
         setActiveView('orders');
@@ -259,7 +273,6 @@ export default function App() {
   const selectedDeliveryFee = selectedCourier ? Number(selectedCourier.fee || 0) : 0;
   const grandTotal = cartSubtotal + selectedDeliveryFee;
 
-  // Fetch live Sendbox courier rates whenever destination details or cart weight changes
   const fetchCourierQuotes = useCallback(
     async ({ addressText, stateVal, cityVal, areaVal, weightVal, latitude, longitude }) => {
       const activeToken = token || localStorage.getItem('sc_token') || '';
@@ -316,7 +329,6 @@ export default function App() {
     [token]
   );
 
-  // Instant Geoapify Autocomplete across Nigeria + smart local fallback when typing
   useEffect(() => {
     const query = locationQuery.trim();
     if (!checkoutOpen || query.length < 2) {
@@ -376,7 +388,6 @@ export default function App() {
     };
   }, [locationQuery, checkoutOpen]);
 
-  // Recalculate shipping fee automatically whenever state/city/area, coordinates, or cart weight updates
   useEffect(() => {
     if (!checkoutOpen) return;
     const timer = setTimeout(() => {
@@ -491,6 +502,27 @@ export default function App() {
       showToast('Please sign in to add pieces to your shopping bag.', 'error');
       return;
     }
+
+    const availableStock = getCartItemStock(bag, colorToUse);
+    if (qtyDelta > 0 && availableStock <= 0) {
+      showToast(`${bag.name} (${colorToUse}) is currently sold out.`, 'error');
+      return;
+    }
+
+    const existingCartItem = cart.find(
+      (item) =>
+        String(item.bag?._id || item.bag) === String(bag._id) &&
+        (item.selectedColor || bag.colorName || 'Classic').toLowerCase() === colorToUse.toLowerCase()
+    );
+    const currentInCart = Number(existingCartItem?.qty || 0);
+    if (qtyDelta > 0 && currentInCart + qtyDelta > availableStock) {
+      showToast(
+        `Only ${availableStock} ${availableStock === 1 ? 'piece' : 'pieces'} of ${bag.name} (${colorToUse}) available in stock.`,
+        'error'
+      );
+      return;
+    }
+
     try {
       const updatedCart = await apiRequest('/api/cart', {
         token: activeToken,
@@ -498,7 +530,9 @@ export default function App() {
         body: JSON.stringify({ bagId: bag._id, qty: qtyDelta, selectedColor: colorToUse }),
       });
       setCart(Array.isArray(updatedCart) ? updatedCart : []);
-      showToast(`Added ${bag.name} (${colorToUse}) to bag.`);
+      if (qtyDelta > 0) {
+        showToast(`Added ${bag.name} (${colorToUse}) to bag.`);
+      }
     } catch (err) {
       showToast(err.message || 'Could not update bag.', 'error');
     }
@@ -528,11 +562,30 @@ export default function App() {
     if (cart.length === 0) return;
 
     const finalAddress = (streetAddress || locationQuery).trim();
+    const finalPhone = deliveryPhone.trim();
     const finalArea = [deliveryArea, deliveryCity, deliveryState].filter(Boolean).join(', ') || locationQuery.trim();
 
     if (!finalAddress || !finalArea) {
       showToast('Please enter your destination state, city, area, and street address.', 'error');
       return;
+    }
+    if (!finalPhone) {
+      showToast('Please enter a recipient phone or WhatsApp number.', 'error');
+      return;
+    }
+
+    for (const item of cart) {
+      const chosenColor = item.selectedColor || item.bag?.colorName || 'Classic';
+      const available = getCartItemStock(item.bag, chosenColor);
+      if (available < Number(item.qty || 1)) {
+        showToast(
+          available <= 0
+            ? `${item.bag?.name} (${chosenColor}) is sold out. Please remove it from your bag.`
+            : `Only ${available} left for ${item.bag?.name} (${chosenColor}). Please adjust your quantity.`,
+          'error'
+        );
+        return;
+      }
     }
 
     setCheckingOut(true);
@@ -545,7 +598,7 @@ export default function App() {
           city: deliveryCity.trim(),
           state: deliveryState.trim(),
           streetAddress: finalAddress,
-          phone: deliveryPhone.trim(),
+          phone: finalPhone,
           selectedCourier,
           lat: coords.lat,
           lon: coords.lon,
@@ -634,11 +687,11 @@ export default function App() {
 
         return {
           photos: variantPhotos.length > 0 ? variantPhotos : fallbackPhotos,
-          stock: isPrimary ? selectedBag.stock ?? 1 : matchedVariant?.stock ?? 1,
+          stock: isPrimary ? Number(selectedBag.stock ?? 0) : Number(matchedVariant?.stock ?? 0),
           allColors: uniqueColors,
         };
       })()
-    : { photos: [], stock: 1, allColors: [] };
+    : { photos: [], stock: 0, allColors: [] };
 
   return (
     <div className="site-wrapper">
@@ -1567,7 +1620,7 @@ export default function App() {
                   <p className="product-modal-desc">{selectedBag.description}</p>
                 )}
 
-                {!isStaff && (
+                {!isStaff && activeBagPresentation.stock > 0 && (
                   <div className="qty-selector-block">
                     <span style={{ fontSize: '13px', fontWeight: '600' }}>Quantity:</span>
                     <div className="qty-inline-controls">
@@ -1582,8 +1635,9 @@ export default function App() {
                       </span>
                       <button
                         type="button"
+                        disabled={selectedQty >= activeBagPresentation.stock}
                         onClick={() =>
-                          setSelectedQty((q) => Math.min(activeBagPresentation.stock || 1, q + 1))
+                          setSelectedQty((q) => Math.min(activeBagPresentation.stock, q + 1))
                         }
                       >
                         <Plus size={14} />
@@ -1780,7 +1834,6 @@ export default function App() {
                   instant suggestions and live courier rates.
                 </p>
 
-                {/* Instant Autocomplete Location Search Across Nigeria */}
                 <div className="form-group" style={{ position: 'relative' }}>
                   <label>Search Location in Nigeria (State, City, Area) *</label>
                   <input
@@ -1929,7 +1982,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* Live Sendbox Courier Quotes */}
                 <div
                   style={{
                     background: 'var(--bg-alabaster)',
@@ -1997,7 +2049,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Billing Summary */}
                 <div
                   style={{
                     background: 'var(--bg-alabaster)',
@@ -2055,104 +2106,112 @@ export default function App() {
                     gap: '14px',
                   }}
                 >
-                  {cart.map((item) => (
-                    <div
-                      key={`${item.bag._id}-${item.selectedColor}`}
-                      style={{
-                        display: 'flex',
-                        gap: '12px',
-                        padding: '12px',
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-alabaster)',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <img
-                        src={resolveBagImage(item.bag.image || item.bag.images?.[0])}
-                        alt={item.bag.name}
-                        style={{ width: '68px', height: '76px', objectFit: 'cover' }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <h5
-                          style={{
-                            fontFamily: 'var(--font-serif)',
-                            fontSize: '15px',
-                            color: 'var(--forest-green)',
-                          }}
-                        >
-                          {item.bag.name}
-                        </h5>
-                        <span
-                          style={{
-                            display: 'block',
-                            fontSize: '12px',
-                            color: 'var(--text-muted)',
-                            margin: '2px 0 4px',
-                          }}
-                        >
-                          Color: {item.selectedColor || 'Classic'}
-                        </span>
-                        <div style={{ fontWeight: '700', fontSize: '13.5px' }}>
-                          ₦{(item.bag.price * item.qty).toLocaleString()}
-                        </div>
-                        <div
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '10px',
-                            marginTop: '6px',
-                            background: '#fff',
-                            border: '1px solid var(--border-subtle)',
-                            padding: '2px 8px',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              item.qty > 1
-                                ? handleAddToBag(item.bag, item.selectedColor, -1)
-                                : handleRemoveFromCart(item.bag._id, item.selectedColor)
-                            }
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              display: 'flex',
-                              alignItems: 'center',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <Minus size={13} />
-                          </button>
-                          <span style={{ fontSize: '13px', fontWeight: '600' }}>{item.qty}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleAddToBag(item.bag, item.selectedColor, 1)}
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              display: 'flex',
-                              alignItems: 'center',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <Plus size={13} />
-                          </button>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveFromCart(item.bag._id, item.selectedColor)}
+                  {cart.map((item) => {
+                    const maxAvailable = getCartItemStock(item.bag, item.selectedColor);
+                    const atMaxStock = maxAvailable > 0 && item.qty >= maxAvailable;
+
+                    return (
+                      <div
+                        key={`${item.bag._id}-${item.selectedColor}`}
                         style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'var(--text-muted)',
-                          cursor: 'pointer',
+                          display: 'flex',
+                          gap: '12px',
+                          padding: '12px',
+                          border: '1px solid var(--border-subtle)',
+                          background: 'var(--bg-alabaster)',
+                          alignItems: 'center',
                         }}
                       >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
+                        <img
+                          src={resolveBagImage(item.bag.image || item.bag.images?.[0])}
+                          alt={item.bag.name}
+                          style={{ width: '68px', height: '76px', objectFit: 'cover' }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <h5
+                            style={{
+                              fontFamily: 'var(--font-serif)',
+                              fontSize: '15px',
+                              color: 'var(--forest-green)',
+                            }}
+                          >
+                            {item.bag.name}
+                          </h5>
+                          <span
+                            style={{
+                              display: 'block',
+                              fontSize: '12px',
+                              color: 'var(--text-muted)',
+                              margin: '2px 0 4px',
+                            }}
+                          >
+                            Color: {item.selectedColor || 'Classic'}
+                            {maxAvailable > 0 ? ` • ${maxAvailable} in stock` : ' • Sold out'}
+                          </span>
+                          <div style={{ fontWeight: '700', fontSize: '13.5px' }}>
+                            ₦{(item.bag.price * item.qty).toLocaleString()}
+                          </div>
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              marginTop: '6px',
+                              background: '#fff',
+                              border: '1px solid var(--border-subtle)',
+                              padding: '2px 8px',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                item.qty > 1
+                                  ? handleAddToBag(item.bag, item.selectedColor, -1)
+                                  : handleRemoveFromCart(item.bag._id, item.selectedColor)
+                              }
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <Minus size={13} />
+                            </button>
+                            <span style={{ fontSize: '13px', fontWeight: '600' }}>{item.qty}</span>
+                            <button
+                              type="button"
+                              disabled={atMaxStock || maxAvailable <= 0}
+                              onClick={() => handleAddToBag(item.bag, item.selectedColor, 1)}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                cursor: atMaxStock || maxAvailable <= 0 ? 'not-allowed' : 'pointer',
+                                opacity: atMaxStock || maxAvailable <= 0 ? 0.4 : 1,
+                              }}
+                            >
+                              <Plus size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFromCart(item.bag._id, item.selectedColor)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div
