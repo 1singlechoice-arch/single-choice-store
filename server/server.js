@@ -36,6 +36,8 @@ const PICKUP_CONFIG = {
   lon: Number(process.env.PICKUP_LON) || 3.249,
 };
 
+const ALLOWED_FULFILLMENT_STATUSES = ['processing', 'dispatched', 'delivered', 'cancelled'];
+
 const allowedOrigins = [
   process.env.CLIENT_URL,
   'https://www.singlechoice.ng',
@@ -183,12 +185,36 @@ const sendOrderEmails = async (order, customer, stage = 'placed') => {
   });
 };
 
+const sendCustomerFulfillmentEmail = async (order, customer) => {
+  if (!customer?.email) return;
+  const shortOrderId = order._id.toString().slice(-6).toUpperCase();
+  const status = order.fulfillmentStatus || 'processing';
+  if (!['dispatched', 'delivered'].includes(status)) return;
+
+  const subject =
+    status === 'dispatched'
+      ? `Your Single Choice Order #${shortOrderId} Has Been Dispatched`
+      : `Your Single Choice Order #${shortOrderId} Has Been Delivered`;
+
+  const trackingLine = order.trackingNumber ? `\nTracking / Waybill #: ${order.trackingNumber}` : '';
+  const courierLine = order.delivery?.courierName ? `\nCourier: ${order.delivery.courierName}` : '';
+
+  setImmediate(() => {
+    sendBrevoEmail({
+      toEmail: customer.email,
+      toName: customer.name,
+      subject,
+      textContent: `Hi ${customer.name},\n\nYour Single Choice order #${shortOrderId} status is now: ${status.toUpperCase()}.${courierLine}${trackingLine}\nDelivery Destination: ${order.delivery?.streetAddress || ''}, ${order.delivery?.area || ''}\n\nThank you for shopping with Single Choice.`,
+    }).catch((err) => console.error('Customer fulfillment email error:', err.message));
+  });
+};
+
 const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
   if (
     lat1 === null || lat1 === undefined || lat1 === '' ||
     lon1 === null || lon1 === undefined || lon1 === '' ||
     lat2 === null || lat2 === undefined || lat2 === '' ||
-    lon2 === null || lat2 === undefined || lon2 === ''
+    lon2 === null || lon2 === undefined || lon2 === ''
   ) {
     return null;
   }
@@ -802,6 +828,53 @@ app.delete('/api/admin/workers/:id', protect, adminOnly, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: err.message || 'Could not revoke worker access.' });
+  }
+});
+
+// Staff & Admin Order Fulfillment Routes (#4)
+app.get('/api/admin/orders', protect, staffOnly, async (req, res) => {
+  try {
+    const orders = await Order.find()
+      .populate('customer', 'name email')
+      .sort({ createdAt: -1 });
+    res.json({ orders });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Could not load orders.' });
+  }
+});
+
+app.patch('/api/admin/orders/:id/status', protect, staffOnly, async (req, res) => {
+  try {
+    const nextStatus = String(req.body?.fulfillmentStatus || '').trim().toLowerCase();
+    const trackingNumber =
+      req.body?.trackingNumber !== undefined ? String(req.body.trackingNumber).trim() : undefined;
+
+    if (!ALLOWED_FULFILLMENT_STATUSES.includes(nextStatus)) {
+      return res.status(400).json({ message: 'Invalid fulfillment status.' });
+    }
+
+    const order = await Order.findById(req.params.id).populate('customer', 'name email');
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found.' });
+    }
+
+    order.fulfillmentStatus = nextStatus;
+    if (trackingNumber !== undefined) {
+      order.trackingNumber = trackingNumber;
+    }
+    if (nextStatus === 'dispatched' && !order.dispatchedAt) {
+      order.dispatchedAt = new Date();
+    }
+    if (nextStatus === 'delivered' && !order.deliveredAt) {
+      order.deliveredAt = new Date();
+    }
+
+    await order.save();
+    await sendCustomerFulfillmentEmail(order, order.customer).catch(() => {});
+
+    res.json({ order });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Could not update order status.' });
   }
 });
 

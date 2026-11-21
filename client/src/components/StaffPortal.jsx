@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Trash2, Video, Package, Pencil, X, ArrowUp, ArrowDown, Users, UserPlus, UserX } from 'lucide-react';
+import { Trash2, Video, Package, Pencil, X, ArrowUp, ArrowDown, Users, UserPlus, UserX, Truck } from 'lucide-react';
 import { apiRequest, resolveBagImage } from '../utils/api';
 
 const MAX_PHOTO_SLOTS = 4;
@@ -262,7 +262,7 @@ export default function StaffPortal({
   onForceLogout,
 }) {
   const isAdmin = user?.role === 'admin';
-  const [activeTab, setActiveTab] = useState('bags'); // 'bags' | 'collections' | 'hero' | 'workers'
+  const [activeTab, setActiveTab] = useState('bags'); // 'bags' | 'orders' | 'collections' | 'hero' | 'workers'
 
   const defaultCategory = collections[0]?.name || 'Tote Bags';
 
@@ -280,6 +280,13 @@ export default function StaffPortal({
   const [submittingBag, setSubmittingBag] = useState(false);
 
   const slotInputRefs = useRef({});
+
+  // Orders & Fulfillment State (#4)
+  const [orders, setOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [orderFilter, setOrderFilter] = useState('all');
+  const [orderDrafts, setOrderDrafts] = useState({});
+  const [savingOrderId, setSavingOrderId] = useState('');
 
   // New Collection State
   const [newColName, setNewColName] = useState('');
@@ -330,6 +337,73 @@ export default function StaffPortal({
   useEffect(() => {
     setCtaInput(heroCtaText || '');
   }, [heroCtaText]);
+
+  const loadOrders = useCallback(async () => {
+    setLoadingOrders(true);
+    try {
+      const data = await apiRequest('/api/admin/orders', {}, onForceLogout);
+      const list = Array.isArray(data) ? data : data?.orders || [];
+      setOrders(list);
+      setOrderDrafts((prev) => {
+        const next = { ...prev };
+        list.forEach((ord) => {
+          if (!next[ord._id]) {
+            next[ord._id] = {
+              fulfillmentStatus: ord.fulfillmentStatus || 'processing',
+              trackingNumber: ord.trackingNumber || '',
+            };
+          }
+        });
+        return next;
+      });
+    } catch (err) {
+      showToast(err.message || 'Could not load orders.', 'error');
+    } finally {
+      setLoadingOrders(false);
+    }
+  }, [onForceLogout, showToast]);
+
+  useEffect(() => {
+    if (activeTab === 'orders') {
+      loadOrders();
+    }
+  }, [activeTab, loadOrders]);
+
+  const handleUpdateOrderFulfillment = async (orderId) => {
+    const draft = orderDrafts[orderId];
+    if (!draft) return;
+
+    setSavingOrderId(orderId);
+    try {
+      const res = await apiRequest(
+        `/api/admin/orders/${encodeURIComponent(orderId)}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            fulfillmentStatus: draft.fulfillmentStatus,
+            trackingNumber: draft.trackingNumber,
+          }),
+        },
+        onForceLogout
+      );
+      const updatedOrder = res?.order;
+      if (updatedOrder) {
+        setOrders((prev) => prev.map((o) => (o._id === orderId ? updatedOrder : o)));
+        setOrderDrafts((prev) => ({
+          ...prev,
+          [orderId]: {
+            fulfillmentStatus: updatedOrder.fulfillmentStatus || 'processing',
+            trackingNumber: updatedOrder.trackingNumber || '',
+          },
+        }));
+      }
+      showToast(`Order #${orderId.slice(-6).toUpperCase()} updated to ${draft.fulfillmentStatus}.`);
+    } catch (err) {
+      showToast(err.message || 'Could not update order.', 'error');
+    } finally {
+      setSavingOrderId('');
+    }
+  };
 
   const loadWorkers = useCallback(async () => {
     if (!isAdmin) {
@@ -828,6 +902,14 @@ export default function StaffPortal({
     }
   };
 
+  const filteredOrders = orders.filter((ord) => {
+    if (orderFilter === 'all') return true;
+    if (orderFilter === 'paid' || orderFilter === 'pending') {
+      return ord.paymentStatus === orderFilter;
+    }
+    return (ord.fulfillmentStatus || 'processing') === orderFilter;
+  });
+
   return (
     <div className="page-container" style={{ maxWidth: '1100px' }}>
       <div className="section-header-row" style={{ marginBottom: '24px' }}>
@@ -847,6 +929,13 @@ export default function StaffPortal({
           onClick={() => setActiveTab('bags')}
         >
           <Package size={16} style={{ display: 'inline', marginRight: '6px' }} /> Handbag Catalog ({bags.length})
+        </button>
+        <button
+          type="button"
+          className={`pill-btn ${activeTab === 'orders' ? 'active' : ''}`}
+          onClick={() => setActiveTab('orders')}
+        >
+          <Truck size={16} style={{ display: 'inline', marginRight: '6px' }} /> Orders &amp; Dispatch ({orders.length})
         </button>
         <button
           type="button"
@@ -1157,6 +1246,154 @@ export default function StaffPortal({
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'orders' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {[
+                { key: 'all', label: `All (${orders.length})` },
+                { key: 'paid', label: 'Paid' },
+                { key: 'pending', label: 'Pending Payment' },
+                { key: 'processing', label: 'Processing' },
+                { key: 'dispatched', label: 'Dispatched' },
+                { key: 'delivered', label: 'Delivered' },
+              ].map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  className={`pill-btn ${orderFilter === f.key ? 'active' : ''}`}
+                  onClick={() => setOrderFilter(f.key)}
+                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={loadOrders}
+              disabled={loadingOrders}
+              style={{ padding: '8px 14px', fontSize: '12.5px' }}
+            >
+              {loadingOrders ? 'Refreshing...' : 'Refresh Orders'}
+            </button>
+          </div>
+
+          {loadingOrders ? (
+            <div className="empty-state-card">Loading customer orders...</div>
+          ) : filteredOrders.length === 0 ? (
+            <div className="empty-state-card">No orders match this filter.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {filteredOrders.map((ord) => {
+                const draft = orderDrafts[ord._id] || {
+                  fulfillmentStatus: ord.fulfillmentStatus || 'processing',
+                  trackingNumber: ord.trackingNumber || '',
+                };
+
+                return (
+                  <div
+                    key={ord._id}
+                    style={{
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      padding: '18px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                          ORDER #{ord._id.slice(-6).toUpperCase()}
+                        </strong>
+                        <span style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginLeft: '10px' }}>
+                          {new Date(ord.createdAt).toLocaleString('en-NG')}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <span className={`status-pill ${ord.paymentStatus === 'paid' ? 'paid' : 'pending'}`}>
+                          {ord.paymentStatus === 'paid' ? 'Paid' : ord.paymentStatus || 'Pending'}
+                        </span>
+                        <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--forest-green)', textTransform: 'capitalize' }}>
+                          {ord.fulfillmentStatus || 'processing'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                      <strong>Customer:</strong> {ord.customer?.name || 'Client'} ({ord.customer?.email || 'N/A'}) •{' '}
+                      <strong>Phone:</strong> {ord.delivery?.phone || 'N/A'}
+                      <br />
+                      <strong>Address:</strong> {ord.delivery?.streetAddress}, {ord.delivery?.area}
+                      {ord.delivery?.courierName ? ` • Courier: ${ord.delivery.courierName}` : ''}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>
+                      {(ord.items || []).map((item, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>
+                            {item.name} × {item.qty}
+                          </span>
+                          <strong>₦{(Number(item.price || 0) * Number(item.qty || 1)).toLocaleString()}</strong>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)', fontWeight: '700' }}>
+                        <span>Total (incl. ₦{Number(ord.deliveryFee ?? ord.delivery?.fee ?? 0).toLocaleString()} delivery)</span>
+                        <span>₦{Number(ord.totalAmount || 0).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', paddingTop: '6px' }}>
+                      <select
+                        value={draft.fulfillmentStatus}
+                        onChange={(e) =>
+                          setOrderDrafts((prev) => ({
+                            ...prev,
+                            [ord._id]: { ...draft, fulfillmentStatus: e.target.value },
+                          }))
+                        }
+                        style={{ padding: '8px 10px', border: '1px solid var(--border-subtle)', background: 'var(--bg-alabaster)', fontSize: '13px' }}
+                      >
+                        <option value="processing">Processing</option>
+                        <option value="dispatched">Dispatched</option>
+                        <option value="delivered">Delivered</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+
+                      <input
+                        type="text"
+                        value={draft.trackingNumber}
+                        onChange={(e) =>
+                          setOrderDrafts((prev) => ({
+                            ...prev,
+                            [ord._id]: { ...draft, trackingNumber: e.target.value },
+                          }))
+                        }
+                        placeholder="Waybill / Tracking # (optional)"
+                        style={{ padding: '8px 10px', border: '1px solid var(--border-subtle)', background: 'var(--bg-alabaster)', fontSize: '13px', flex: 1, minWidth: '180px' }}
+                      />
+
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={savingOrderId === ord._id}
+                        onClick={() => handleUpdateOrderFulfillment(ord._id)}
+                        style={{ padding: '8px 14px', fontSize: '13px' }}
+                      >
+                        {savingOrderId === ord._id ? 'Updating...' : 'Update Order'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
