@@ -82,14 +82,14 @@ button {
 /* Desktop Header Layout: Logo Left (auto), Nav Center (1fr), Icons Right (auto) */
 .header-inner {
   width: 100%;
-  max-width: 1320px;
+  max-width: 1360px;
   min-width: 0;
   margin: 0 auto;
   padding: 14px 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
 }
 
 .header-left,
@@ -129,9 +129,9 @@ button {
 .brand-logo-text,
 .brand-wordmark {
   font-family: var(--font-serif);
-  font-size: 21px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   color: var(--forest-green);
   line-height: 1.1;
   white-space: nowrap;
@@ -142,16 +142,16 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  gap: 14px;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
 .nav-link {
   background: transparent;
   border: none;
-  font-size: 12px;
-  letter-spacing: 0.09em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
   padding: 6px 0;
@@ -160,6 +160,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex-shrink: 0;
 }
 
 .nav-link:hover,
@@ -175,6 +176,7 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  margin-left: 16px;
   flex-shrink: 0;
 }
 
@@ -185,7 +187,7 @@ button {
 }
 
 .user-greeting {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--forest-green);
   white-space: nowrap;
@@ -941,16 +943,6 @@ button {
   color: var(--forest-green);
 }
 
-.mobile-drawer-links,
-.mobile-drawer-body {
-  padding: 18px;
-  overflow-y: auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .mobile-drawer-link {
   width: 100%;
   background: var(--bg-card);
@@ -1585,6 +1577,22 @@ button {
   }
 }
 
+@media (max-width: 1180px) {
+  .desktop-nav,
+  .header-nav-desktop {
+    gap: 10px;
+  }
+  .nav-link {
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+  }
+  .brand-logo-text,
+  .brand-wordmark {
+    font-size: 17px;
+    letter-spacing: 0.1em;
+  }
+}
+
 @media (max-width: 1100px) {
   .bag-grid,
   .bags-grid {
@@ -1653,6 +1661,11 @@ button {
   .brand-wordmark {
     font-size: 13.5px;
     letter-spacing: 0.06em;
+  }
+
+  .header-right,
+  .header-actions {
+    margin-left: 6px;
   }
 
   .mobile-menu-btn,
