@@ -7,7 +7,6 @@ import {
   Plus,
   Minus,
   Trash2,
-  CheckCircle2,
   MapPin,
   ShieldCheck,
   Search,
@@ -37,6 +36,14 @@ const NIGERIA_STATES = [
 ];
 
 const SAVED_ITEMS_STORAGE_KEY = 'single_choice_saved_items_v1';
+const SUPPORT_PHONE_DISPLAY = (import.meta.env.VITE_SUPPORT_PHONE || '08034093303').trim();
+const RAW_WHATSAPP_DIGITS = (import.meta.env.VITE_WHATSAPP_NUMBER || SUPPORT_PHONE_DISPLAY).replace(/[^\d]/g, '');
+const WHATSAPP_INTERNATIONAL_NUMBER = RAW_WHATSAPP_DIGITS.startsWith('0')
+  ? `234${RAW_WHATSAPP_DIGITS.slice(1)}`
+  : RAW_WHATSAPP_DIGITS || '2348034093303';
+const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_INTERNATIONAL_NUMBER}?text=${encodeURIComponent(
+  'Hello Single Choice Concierge, I would like to inquire about a handbag.'
+)}`;
 
 const getBagPrimaryColor = (bag) => (bag?.colorName || 'Classic').trim();
 
@@ -841,7 +848,6 @@ export default function App() {
 
   const activeDeliveryFee = selectedQuote ? Number(selectedQuote.fee || 0) : 0;
 
-  // Geoapify Address Autocomplete
   useEffect(() => {
     if (!checkoutOpen) return;
     const queryText = [streetAddress, deliveryArea, deliveryCity, deliveryState]
@@ -1552,7 +1558,7 @@ export default function App() {
         </main>
       )}
 
-      {/* CUSTOMER MY ORDERS & DISPATCH VIEW (#4) */}
+      {/* CUSTOMER MY ORDERS & DISPATCH VIEW */}
       {view === 'orders' && (
         <main className="page-container">
           <div className="section-header-row">
@@ -1621,7 +1627,7 @@ export default function App() {
         </main>
       )}
 
-      {/* Footer */}
+      {/* Footer (#5) */}
       <footer className="site-footer">
         <div className="footer-inner">
           <div>
@@ -1632,14 +1638,33 @@ export default function App() {
           </div>
 
           <div className="footer-contact">
-            <div><Phone size={14} /> +234 800 000 0000</div>
-            <div><Mail size={14} /> 1singlechoice@gmail.com</div>
+            <a
+              href={`tel:${SUPPORT_PHONE_DISPLAY.replace(/\s+/g, '')}`}
+              style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Phone size={14} /> {SUPPORT_PHONE_DISPLAY}
+            </a>
+            <a
+              href="mailto:1singlechoice@gmail.com"
+              style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Mail size={14} /> 1singlechoice@gmail.com
+            </a>
+            <a
+              href={WHATSAPP_LINK}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-ghost-sm"
+              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <MessageCircle size={14} /> WhatsApp Concierge
+            </a>
             <button
               type="button"
               className="btn-ghost-sm"
               onClick={() => setContactOpen(true)}
             >
-              Contact Concierge
+              Send Concierge Note
             </button>
           </div>
         </div>
@@ -2107,7 +2132,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Concierge Contact Modal */}
+      {/* Concierge Contact Modal (#5) */}
       {contactOpen && (
         <div className="modal-backdrop" onClick={() => setContactOpen(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -2121,6 +2146,24 @@ export default function App() {
               >
                 <X size={20} />
               </button>
+            </div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <a
+                href={WHATSAPP_LINK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary full-width"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  textDecoration: 'none',
+                }}
+              >
+                <MessageCircle size={15} /> Chat Instantly on WhatsApp ({SUPPORT_PHONE_DISPLAY})
+              </a>
             </div>
 
             <form onSubmit={handleContactSubmit} className="modal-form">
