@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import express from 'express';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
@@ -58,50 +59,6 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'Single Choice API' });
-});
-
-app.post('/api/webhooks/sendbox', (req, res) => {
-  console.log('Sendbox webhook event received:', req.body);
-  res.status(200).json({ received: true });
-});
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'single-choice-handbags',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 },
-});
-
-const videoStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'single-choice-campaigns',
-    resource_type: 'video',
-    allowed_formats: ['mp4', 'webm', 'mov'],
-  },
-});
-
-const uploadVideo = multer({
-  storage: videoStorage,
-  limits: { fileSize: 80 * 1024 * 1024 },
-});
 
 const extractCloudinaryPublicId = (url) => {
   if (!url || !url.includes('res.cloudinary.com')) return null;
@@ -212,7 +169,7 @@ const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
     lat1 === null || lat1 === undefined || lat1 === '' ||
     lon1 === null || lon1 === undefined || lon1 === '' ||
     lat2 === null || lat2 === undefined || lat2 === '' ||
-    lon2 === null || lon2 === undefined || lon2 === ''
+    lon2 === null || lat2 === undefined || lat2 === ''
   ) {
     return null;
   }
@@ -500,44 +457,69 @@ const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weigh
 };
 
 const fulfillPaidOrder = async (reference) => {
+  if (!reference) return null;
+
   const existingOrder = await Order.findOne({ paystackReference: reference });
   if (!existingOrder) return null;
-  if (existingOrder.paymentStatus === 'paid') return existingOrder;
+  if (existingOrder.paymentStatus === 'paid' && existingOrder.fulfilledAt) {
+    return existingOrder;
+  }
 
   const confirmedOrder = await Order.findOneAndUpdate(
-    { paystackReference: reference, paymentStatus: { $ne: 'paid' } },
-    { paymentStatus: 'paid' },
+    {
+      paystackReference: reference,
+      $or: [{ paymentStatus: { $ne: 'paid' } }, { fulfilledAt: null }],
+    },
+    {
+      $set: {
+        paymentStatus: 'paid',
+        fulfilledAt: existingOrder.fulfilledAt || new Date(),
+      },
+    },
     { new: true }
   );
 
-  if (!confirmedOrder) return Order.findOne({ paystackReference: reference });
+  if (!confirmedOrder) {
+    return Order.findOne({ paystackReference: reference });
+  }
 
   const user = await User.findById(confirmedOrder.customer);
-  if (user && user.cart.length > 0) {
-    for (const item of user.cart) {
-      const bag = await Bag.findById(item.bag);
-      if (bag) {
-        const primaryColor = bag.colorName || 'Classic';
-        const chosenColor = (item.selectedColor || primaryColor).toLowerCase();
 
-        if (chosenColor === primaryColor.toLowerCase()) {
-          bag.stock = Math.max(0, (bag.stock ?? 1) - item.qty);
-        } else {
-          const variant = (bag.variants || []).find(
-            (v) => v.colorName.toLowerCase() === chosenColor
-          );
-          if (variant) {
-            variant.stock = Math.max(0, (variant.stock ?? 1) - item.qty);
-          }
-        }
+  // Deduct stock based on confirmedOrder.items so fulfillment never depends on an active cart session
+  for (const item of confirmedOrder.items || []) {
+    const qtyToDeduct = Math.max(1, Number(item.qty || 1));
+    const bag = item.bagId
+      ? await Bag.findById(item.bagId)
+      : item.bagName
+      ? await Bag.findOne({ name: item.bagName })
+      : null;
 
-        const totalRemaining =
-          (bag.stock ?? 0) +
-          (bag.variants || []).reduce((sum, v) => sum + (v.stock ?? 0), 0);
-        bag.inStock = totalRemaining > 0;
-        await bag.save();
+    if (!bag) continue;
+
+    const primaryColor = (bag.colorName || 'Classic').toLowerCase();
+    const chosenColor = (item.selectedColor || bag.colorName || 'Classic').trim().toLowerCase();
+
+    if (chosenColor === primaryColor) {
+      bag.stock = Math.max(0, Number(bag.stock ?? 1) - qtyToDeduct);
+    } else {
+      const variant = (bag.variants || []).find(
+        (v) => (v.colorName || '').trim().toLowerCase() === chosenColor
+      );
+      if (variant) {
+        variant.stock = Math.max(0, Number(variant.stock ?? 1) - qtyToDeduct);
+      } else {
+        bag.stock = Math.max(0, Number(bag.stock ?? 1) - qtyToDeduct);
       }
     }
+
+    const totalRemaining =
+      Number(bag.stock ?? 0) +
+      (bag.variants || []).reduce((sum, v) => sum + Number(v.stock ?? 0), 0);
+    bag.inStock = totalRemaining > 0;
+    await bag.save();
+  }
+
+  if (user && Array.isArray(user.cart) && user.cart.length > 0) {
     user.cart = [];
     await user.save();
   }
@@ -548,6 +530,98 @@ const fulfillPaidOrder = async (reference) => {
 
   return confirmedOrder;
 };
+
+// Paystack Webhook Endpoint (must use express.raw before express.json)
+app.post(
+  '/api/webhooks/paystack',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    try {
+      const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+      const signature = req.headers['x-paystack-signature'];
+
+      if (!secret) {
+        console.warn('PAYSTACK_SECRET_KEY not set; ignoring Paystack webhook.');
+        return res.status(200).json({ received: true });
+      }
+
+      if (!signature || typeof signature !== 'string') {
+        return res.status(401).json({ message: 'Missing Paystack signature.' });
+      }
+
+      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+      const expectedHash = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+
+      const sigBuf = Buffer.from(signature, 'utf8');
+      const expBuf = Buffer.from(expectedHash, 'utf8');
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+        return res.status(401).json({ message: 'Invalid Paystack webhook signature.' });
+      }
+
+      const event = JSON.parse(rawBody.toString('utf8'));
+      const reference = event?.data?.reference;
+
+      if (event?.event === 'charge.success' && reference) {
+        await fulfillPaidOrder(String(reference));
+      } else if (event?.event === 'charge.failed' && reference) {
+        await Order.findOneAndUpdate(
+          { paystackReference: String(reference), paymentStatus: 'pending' },
+          { $set: { paymentStatus: 'failed' } }
+        );
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (err) {
+      console.error('Paystack webhook error:', err.message);
+      return res.status(500).json({ message: 'Webhook processing error.' });
+    }
+  }
+);
+
+app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'Single Choice API' });
+});
+
+app.post('/api/webhooks/sendbox', (req, res) => {
+  console.log('Sendbox webhook event received:', req.body);
+  res.status(200).json({ received: true });
+});
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'single-choice-handbags',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+const videoStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'single-choice-campaigns',
+    resource_type: 'video',
+    allowed_formats: ['mp4', 'webm', 'mov'],
+  },
+});
+
+const uploadVideo = multer({
+  storage: videoStorage,
+  limits: { fileSize: 80 * 1024 * 1024 },
+});
 
 const seedInitialData = async () => {
   const adminExists = await User.findOne({ role: 'admin' });
@@ -1280,12 +1354,30 @@ app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => 
 
     const createdOrder = await Order.create({
       customer: user._id,
-      items: validItems.map((i) => ({
-        name: `${i.bag.name} (${i.selectedColor || 'Classic'})`,
-        price: i.bag.price,
-        qty: i.qty,
-      })),
+      items: validItems.map((i) => {
+        const chosenColor = i.selectedColor || i.bag.colorName || 'Classic';
+        const matchedVariant = (i.bag.variants || []).find(
+          (v) => (v.colorName || '').toLowerCase() === chosenColor.toLowerCase()
+        );
+        const itemImage =
+          matchedVariant?.image ||
+          matchedVariant?.images?.[0] ||
+          i.bag.image ||
+          i.bag.images?.[0] ||
+          '';
+
+        return {
+          bagId: i.bag._id,
+          bagName: i.bag.name,
+          selectedColor: chosenColor,
+          name: `${i.bag.name} (${chosenColor})`,
+          price: i.bag.price,
+          qty: i.qty,
+          image: itemImage,
+        };
+      }),
       delivery: {
+        city: (city || state || 'Lagos').trim(),
         area: formattedArea,
         streetAddress,
         phone,
