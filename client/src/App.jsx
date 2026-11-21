@@ -210,8 +210,9 @@ function BagDetailModal({
           className="modal-close-btn bag-detail-close"
           onClick={onClose}
           aria-label="Close bag details"
+          style={{ color: '#142B22', backgroundColor: '#FFFFFF' }}
         >
-          <X size={20} />
+          <X size={20} color="#142B22" />
         </button>
 
         <div className="bag-detail-grid">
@@ -1119,20 +1120,33 @@ export default function App() {
 
       {/* Main Header */}
       <header className="site-header" style={{ width: '100%' }}>
-        <div className="header-inner" style={{ width: '100%', maxWidth: '1360px', margin: '0 auto' }}>
-          <div className="header-left">
+        <div
+          className="header-inner"
+          style={{
+            width: '100%',
+            maxWidth: '1360px',
+            margin: '0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+          }}
+        >
+          <div className="header-left" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
             <button
               type="button"
               className="icon-btn mobile-only"
               onClick={() => setDrawerOpen(true)}
               aria-label="Open menu"
+              style={{ flexShrink: 0, color: '#142B22' }}
             >
-              <Menu size={20} />
+              <Menu size={20} color="#142B22" />
             </button>
 
             <button
               type="button"
               className="brand-wordmark"
+              style={{ whiteSpace: 'nowrap', fontSize: 'clamp(0.95rem, 4vw, 1.35rem)' }}
               onClick={() => {
                 setView('home');
                 setSelectedCategory('All');
@@ -1194,11 +1208,13 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="header-right">
+          <div className="header-right" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
             {user ? (
-              <div className="user-chip-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <span className="user-greeting">Hi, {user.name?.split(' ')[0] || 'Client'}</span>
-                <button type="button" className="btn-ghost-sm" onClick={handleLogout}>
+              <div className="user-chip-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <span className="user-greeting" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                  Hi, {user.name?.split(' ')[0] || 'Client'}
+                </span>
+                <button type="button" className="btn-ghost-sm" style={{ whiteSpace: 'nowrap', padding: '4px 8px' }} onClick={handleLogout}>
                   Sign Out
                 </button>
               </div>
@@ -1208,8 +1224,9 @@ export default function App() {
                 className="icon-btn"
                 onClick={() => openAuthModal('login')}
                 aria-label="Sign in"
+                style={{ color: '#142B22' }}
               >
-                <User size={20} />
+                <User size={20} color="#142B22" />
               </button>
             )}
 
@@ -1218,8 +1235,9 @@ export default function App() {
               className="bag-btn"
               onClick={() => setDrawerOpen(true)}
               aria-label="Open shopping bag"
+              style={{ flexShrink: 0, color: '#142B22' }}
             >
-              <ShoppingBag size={20} />
+              <ShoppingBag size={20} color="#142B22" />
               <span className="bag-count">{cartCount}</span>
             </button>
           </div>
@@ -1682,14 +1700,15 @@ export default function App() {
         <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}>
           <aside className="bag-drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-header">
-              <h3>Your Shopping Bag ({cartCount})</h3>
+              <h3 style={{ color: '#FFFFFF' }}>Your Shopping Bag ({cartCount})</h3>
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => setDrawerOpen(false)}
                 aria-label="Close bag"
+                style={{ color: '#FFFFFF', backgroundColor: 'rgba(255,255,255,0.12)' }}
               >
-                <X size={20} />
+                <X size={20} color="#FFFFFF" />
               </button>
             </div>
 
@@ -1800,8 +1819,9 @@ export default function App() {
                 className="icon-btn"
                 onClick={() => setCheckoutOpen(false)}
                 aria-label="Close checkout"
+                style={{ color: '#142B22', backgroundColor: 'rgba(20,43,34,0.08)' }}
               >
-                <X size={20} />
+                <X size={20} color="#142B22" />
               </button>
             </div>
 
@@ -1974,8 +1994,9 @@ export default function App() {
                 className="icon-btn"
                 onClick={() => setAuthModalOpen(false)}
                 aria-label="Close modal"
+                style={{ color: '#142B22', backgroundColor: 'rgba(20,43,34,0.08)' }}
               >
-                <X size={20} />
+                <X size={20} color="#142B22" />
               </button>
             </div>
 
@@ -2150,8 +2171,9 @@ export default function App() {
                 className="icon-btn"
                 onClick={() => setContactOpen(false)}
                 aria-label="Close concierge modal"
+                style={{ color: '#142B22', backgroundColor: 'rgba(20,43,34,0.08)' }}
               >
-                <X size={20} />
+                <X size={20} color="#142B22" />
               </button>
             </div>
 
