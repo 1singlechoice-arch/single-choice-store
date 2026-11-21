@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Trash2, Video, Package, Pencil, X, ArrowUp, ArrowDown } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Trash2, Video, Package, Pencil, X, ArrowUp, ArrowDown, Users, UserPlus, UserX } from 'lucide-react';
 import { apiRequest, resolveBagImage } from '../utils/api';
 
 const MAX_PHOTO_SLOTS = 4;
@@ -261,7 +261,8 @@ export default function StaffPortal({
   showToast,
   onForceLogout,
 }) {
-  const [activeTab, setActiveTab] = useState('bags'); // 'bags' | 'collections' | 'hero'
+  const isAdmin = user?.role === 'admin';
+  const [activeTab, setActiveTab] = useState('bags'); // 'bags' | 'collections' | 'hero' | 'workers'
 
   const defaultCategory = collections[0]?.name || 'Tote Bags';
 
@@ -293,6 +294,19 @@ export default function StaffPortal({
   // Media Upload State
   const [uploadingHero, setUploadingHero] = useState(false);
 
+  // Workers Management State (Admin only)
+  const [workers, setWorkers] = useState([]);
+  const [loadingWorkers, setLoadingWorkers] = useState(false);
+  const [newWorker, setNewWorker] = useState({ name: '', email: '', password: '', role: 'staff' });
+  const [submittingWorker, setSubmittingWorker] = useState(false);
+  const [revokingWorkerId, setRevokingWorkerId] = useState('');
+
+  useEffect(() => {
+    if (!isAdmin && activeTab === 'workers') {
+      setActiveTab('bags');
+    }
+  }, [isAdmin, activeTab]);
+
   useEffect(() => {
     if (!editingBagId && collections.length > 0) {
       setCategory((prev) =>
@@ -316,6 +330,138 @@ export default function StaffPortal({
   useEffect(() => {
     setCtaInput(heroCtaText || '');
   }, [heroCtaText]);
+
+  const loadWorkers = useCallback(async () => {
+    if (!isAdmin) {
+      setWorkers([]);
+      return;
+    }
+    setLoadingWorkers(true);
+    try {
+      const data = await apiRequest('/api/admin/workers', {}, onForceLogout);
+      const list = Array.isArray(data) ? data : data?.workers || data?.staff || [];
+      setWorkers(Array.isArray(list) ? list : []);
+    } catch (err) {
+      if (err?.status === 404) {
+        try {
+          const fallback = await apiRequest('/api/staff', {}, onForceLogout);
+          const list = Array.isArray(fallback) ? fallback : fallback?.workers || fallback?.staff || [];
+          setWorkers(Array.isArray(list) ? list : []);
+          return;
+        } catch {
+          // Keep empty list if endpoint is not yet exposed
+        }
+      }
+      console.error(err);
+    } finally {
+      setLoadingWorkers(false);
+    }
+  }, [isAdmin, onForceLogout]);
+
+  useEffect(() => {
+    if (isAdmin && activeTab === 'workers') {
+      loadWorkers();
+    }
+  }, [isAdmin, activeTab, loadWorkers]);
+
+  const handleAddWorker = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) {
+      showToast('Only admin accounts can add workers.', 'error');
+      return;
+    }
+    const email = newWorker.email.trim().toLowerCase();
+    const workerName = newWorker.name.trim();
+    if (!email) {
+      showToast('Please enter a worker email address.', 'error');
+      return;
+    }
+
+    setSubmittingWorker(true);
+    try {
+      const payload = {
+        name: workerName || email.split('@')[0],
+        email,
+        role: newWorker.role || 'staff',
+        ...(newWorker.password ? { password: newWorker.password } : {}),
+      };
+
+      let created;
+      try {
+        created = await apiRequest(
+          '/api/admin/workers',
+          { method: 'POST', body: JSON.stringify(payload) },
+          onForceLogout
+        );
+      } catch (err) {
+        if (err?.status === 404) {
+          created = await apiRequest(
+            '/api/staff',
+            { method: 'POST', body: JSON.stringify(payload) },
+            onForceLogout
+          );
+        } else {
+          throw err;
+        }
+      }
+
+      const added = created?.worker || created?.user || created || {
+        _id: email,
+        name: payload.name,
+        email: payload.email,
+        role: payload.role,
+      };
+
+      setWorkers((prev) => [
+        added,
+        ...prev.filter((w) => (w._id || w.id || w.email) !== (added._id || added.id || added.email)),
+      ]);
+      setNewWorker({ name: '', email: '', password: '', role: 'staff' });
+      showToast(`Added ${added.email} as ${added.role || 'staff'}.`);
+      loadWorkers();
+    } catch (err) {
+      showToast(err.message || 'Failed to add worker.', 'error');
+    } finally {
+      setSubmittingWorker(false);
+    }
+  };
+
+  const handleRevokeWorker = async (worker) => {
+    if (!isAdmin) {
+      showToast('Only admin accounts can revoke workers.', 'error');
+      return;
+    }
+    const workerId = worker._id || worker.id || worker.email;
+    if (!workerId) return;
+
+    setRevokingWorkerId(String(workerId));
+    try {
+      try {
+        await apiRequest(
+          `/api/admin/workers/${encodeURIComponent(workerId)}`,
+          { method: 'DELETE' },
+          onForceLogout
+        );
+      } catch (err) {
+        if (err?.status === 404) {
+          await apiRequest(
+            `/api/staff/${encodeURIComponent(workerId)}`,
+            { method: 'DELETE' },
+            onForceLogout
+          );
+        } else {
+          throw err;
+        }
+      }
+
+      setWorkers((prev) => prev.filter((w) => (w._id || w.id || w.email) !== workerId));
+      showToast(`Revoked access for ${worker.email || worker.name || 'worker'}.`);
+    } catch (err) {
+      showToast(err.message || 'Failed to revoke worker access.', 'error');
+    } finally {
+      setRevokingWorkerId('');
+    }
+  };
 
   const previewUrlsRef = useRef([]);
   useEffect(() => {
@@ -388,7 +534,6 @@ export default function StaffPortal({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Primary bag slot handlers (position-constant)
   const handleSelectPrimarySlotFile = (slotIdx, file) => {
     if (!file) return;
     const objectUrl = URL.createObjectURL(file);
@@ -435,7 +580,6 @@ export default function StaffPortal({
     });
   };
 
-  // Color variant handlers (position-constant per variant)
   const handleAddVariantRow = () => {
     setVariants((prev) => [...prev, createEmptyVariant()]);
   };
@@ -718,6 +862,15 @@ export default function StaffPortal({
         >
           <Video size={16} style={{ display: 'inline', marginRight: '6px' }} /> Homepage Hero &amp; Text
         </button>
+        {isAdmin && (
+          <button
+            type="button"
+            className={`pill-btn ${activeTab === 'workers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('workers')}
+          >
+            <Users size={16} style={{ display: 'inline', marginRight: '6px' }} /> Workers ({workers.length})
+          </button>
+        )}
       </div>
 
       {activeTab === 'bags' && (
@@ -989,7 +1142,7 @@ export default function StaffPortal({
                     >
                       <Pencil size={14} /> Edit
                     </button>
-                    {user?.role === 'admin' && (
+                    {isAdmin && (
                       <button
                         type="button"
                         onClick={() => handleDeleteBag(bag._id)}
@@ -1038,7 +1191,7 @@ export default function StaffPortal({
                 }}
               >
                 <strong>{col.name}</strong>
-                {user?.role === 'admin' && (
+                {isAdmin && (
                   <button
                     type="button"
                     onClick={() => handleDeleteCollection(col._id)}
@@ -1162,6 +1315,184 @@ export default function StaffPortal({
               <p style={{ fontSize: '13px', color: 'var(--champagne-gold)' }}>Uploading media to Cloudinary...</p>
             )}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'workers' && isAdmin && (
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            padding: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '20px',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Add &amp; Revoke Workers</h3>
+              <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>
+                Grant or revoke staff and admin portal access for your team.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={loadWorkers}
+              disabled={loadingWorkers}
+              style={{ padding: '8px 14px', fontSize: '13px' }}
+            >
+              {loadingWorkers ? 'Refreshing...' : 'Refresh List'}
+            </button>
+          </div>
+
+          <form
+            onSubmit={handleAddWorker}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '12px',
+              alignItems: 'end',
+              padding: '16px',
+              background: 'var(--bg-alabaster)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            <div className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: '12.5px', fontWeight: '600' }}>Worker Name</label>
+              <input
+                type="text"
+                value={newWorker.name}
+                onChange={(e) => setNewWorker({ ...newWorker, name: e.target.value })}
+                placeholder="e.g. Tunde Ade"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border-subtle)', background: '#fff', fontSize: '13.5px' }}
+              />
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: '12.5px', fontWeight: '600' }}>Worker Email *</label>
+              <input
+                type="email"
+                required
+                value={newWorker.email}
+                onChange={(e) => setNewWorker({ ...newWorker, email: e.target.value })}
+                placeholder="worker@singlechoice.ng"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border-subtle)', background: '#fff', fontSize: '13.5px' }}
+              />
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: '12.5px', fontWeight: '600' }}>Temporary Password</label>
+              <input
+                type="password"
+                value={newWorker.password}
+                onChange={(e) => setNewWorker({ ...newWorker, password: e.target.value })}
+                placeholder="Optional if invite-based"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border-subtle)', background: '#fff', fontSize: '13.5px' }}
+              />
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: '12.5px', fontWeight: '600' }}>Role</label>
+              <select
+                value={newWorker.role}
+                onChange={(e) => setNewWorker({ ...newWorker, role: e.target.value })}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--border-subtle)', background: '#fff', fontSize: '13.5px' }}
+              >
+                <option value="staff">Staff</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={submittingWorker}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                padding: '11px 16px',
+              }}
+            >
+              <UserPlus size={15} />
+              {submittingWorker ? 'Adding...' : 'Add Worker'}
+            </button>
+          </form>
+
+          {loadingWorkers ? (
+            <div style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>Loading workers...</div>
+          ) : workers.length === 0 ? (
+            <div
+              style={{
+                padding: '18px',
+                background: 'var(--bg-alabaster)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: '13.5px',
+                color: 'var(--text-muted)',
+              }}
+            >
+              No workers listed yet. Add a worker above to grant staff portal access.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {workers.map((worker) => {
+                const workerId = worker._id || worker.id || worker.email;
+                const isSelf =
+                  worker.email &&
+                  user?.email &&
+                  worker.email.toLowerCase() === user.email.toLowerCase();
+
+                return (
+                  <div
+                    key={workerId}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                      padding: '12px 16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <div>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        {worker.name || worker.email}
+                      </strong>
+                      <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                        {worker.email} • Role: <strong>{worker.role || 'staff'}</strong>
+                      </div>
+                    </div>
+
+                    {!isSelf && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={revokingWorkerId === String(workerId)}
+                        onClick={() => handleRevokeWorker(worker)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 12px',
+                          fontSize: '12.5px',
+                          borderColor: 'var(--danger)',
+                          color: 'var(--danger)',
+                        }}
+                      >
+                        <UserX size={14} />
+                        {revokingWorkerId === String(workerId) ? 'Revoking...' : 'Revoke Access'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
