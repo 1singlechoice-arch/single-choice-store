@@ -362,6 +362,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [bags, setBags] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -1129,15 +1130,26 @@ export default function App() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: '8px',
+            gap: '6px',
+            paddingLeft: '10px',
+            paddingRight: '10px',
           }}
         >
-          <div className="header-left" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+          <div
+            className="header-left"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              minWidth: 0,
+              flex: '1 1 auto',
+            }}
+          >
             <button
               type="button"
               className="icon-btn mobile-only"
-              onClick={() => setDrawerOpen(true)}
-              aria-label="Open menu"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
               style={{ flexShrink: 0, color: '#142B22' }}
             >
               <Menu size={20} color="#142B22" />
@@ -1146,7 +1158,13 @@ export default function App() {
             <button
               type="button"
               className="brand-wordmark"
-              style={{ whiteSpace: 'nowrap', fontSize: 'clamp(0.95rem, 4vw, 1.35rem)' }}
+              style={{
+                whiteSpace: 'nowrap',
+                fontSize: 'clamp(0.85rem, 3.6vw, 1.35rem)',
+                letterSpacing: '0.03em',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
               onClick={() => {
                 setView('home');
                 setSelectedCategory('All');
@@ -1208,13 +1226,27 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="header-right" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          <div
+            className="header-right"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              flexShrink: 0,
+              marginLeft: '4px',
+            }}
+          >
             {user ? (
-              <div className="user-chip-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                <span className="user-greeting" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+              <div className="user-chip-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <span className="user-greeting desktop-only-greeting" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                   Hi, {user.name?.split(' ')[0] || 'Client'}
                 </span>
-                <button type="button" className="btn-ghost-sm" style={{ whiteSpace: 'nowrap', padding: '4px 8px' }} onClick={handleLogout}>
+                <button
+                  type="button"
+                  className="btn-ghost-sm"
+                  style={{ whiteSpace: 'nowrap', padding: '4px 8px', fontSize: '0.75rem' }}
+                  onClick={handleLogout}
+                >
                   Sign Out
                 </button>
               </div>
@@ -1296,7 +1328,16 @@ export default function App() {
           </section>
 
           <section className="page-container">
-            <div className="section-header-row">
+            <div
+              className="section-header-row"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px',
+              }}
+            >
               <div>
                 <span className="eyebrow-gold">CURATED SILHOUETTES</span>
                 <h2 className="editorial-heading">Featured Pieces</h2>
@@ -1304,7 +1345,12 @@ export default function App() {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => setView('shop')}
+                style={{ flexShrink: 0 }}
+                onClick={() => {
+                  setSelectedCategory('All');
+                  setSearchQuery('');
+                  setView('shop');
+                }}
               >
                 View All ({bags.length})
               </button>
@@ -1314,7 +1360,7 @@ export default function App() {
               <div className="empty-state-card">Loading collection...</div>
             ) : (
               <div className="bag-grid">
-                {bags.slice(0, 8).map((bag) => {
+                {bags.slice(0, 6).map((bag) => {
                   const totalStock = getBagTotalStock(bag);
                   const primaryColor = getBagPrimaryColor(bag);
                   const coverSrc = resolveBagImage(bag.image || bag.images?.[0]);
@@ -1351,14 +1397,24 @@ export default function App() {
                           <span>{primaryColor}</span>
                         </div>
                         <h3 className="bag-card-title">{bag.name}</h3>
-                        <div className="bag-card-bottom">
-                          <span className="bag-card-price">
+                        <div
+                          className="bag-card-bottom"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '6px',
+                          }}
+                        >
+                          <span className="bag-card-price" style={{ whiteSpace: 'nowrap' }}>
                             ₦{Number(bag.price || 0).toLocaleString()}
                           </span>
-                          <div style={{ display: 'flex', gap: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                             <button
                               type="button"
                               className="btn-ghost-sm"
+                              style={{ padding: '5px 7px' }}
                               onClick={() => setActiveBagModal({ bag, color: primaryColor })}
                               aria-label={`Inspect ${bag.name}`}
                             >
@@ -1367,6 +1423,7 @@ export default function App() {
                             <button
                               type="button"
                               className="btn-primary-sm"
+                              style={{ padding: '5px 9px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
                               disabled={totalStock <= 0}
                               onClick={() => handleAddToBag(bag, 1, primaryColor)}
                             >
@@ -1466,14 +1523,24 @@ export default function App() {
                         <span>{totalStock > 0 ? `${totalStock} in stock` : 'Sold out'}</span>
                       </div>
                       <h3 className="bag-card-title">{bag.name}</h3>
-                      <div className="bag-card-bottom">
-                        <span className="bag-card-price">
+                      <div
+                        className="bag-card-bottom"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '6px',
+                        }}
+                      >
+                        <span className="bag-card-price" style={{ whiteSpace: 'nowrap' }}>
                           ₦{Number(bag.price || 0).toLocaleString()}
                         </span>
-                        <div style={{ display: 'flex', gap: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                           <button
                             type="button"
                             className="btn-ghost-sm"
+                            style={{ padding: '5px 7px' }}
                             onClick={() => setActiveBagModal({ bag, color: primaryColor })}
                             aria-label={`Inspect ${bag.name}`}
                           >
@@ -1482,6 +1549,7 @@ export default function App() {
                           <button
                             type="button"
                             className="btn-primary-sm"
+                            style={{ padding: '5px 9px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
                             disabled={totalStock <= 0}
                             onClick={() => handleAddToBag(bag, 1, primaryColor)}
                           >
@@ -1547,14 +1615,24 @@ export default function App() {
                         <span>{item.selectedColor}</span>
                       </div>
                       <h3 className="bag-card-title">{item.name}</h3>
-                      <div className="bag-card-bottom">
-                        <span className="bag-card-price">
+                      <div
+                        className="bag-card-bottom"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '6px',
+                        }}
+                      >
+                        <span className="bag-card-price" style={{ whiteSpace: 'nowrap' }}>
                           ₦{Number(item.price || 0).toLocaleString()}
                         </span>
-                        <div style={{ display: 'flex', gap: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
                           <button
                             type="button"
                             className="btn-ghost-sm"
+                            style={{ padding: '5px 7px', fontSize: '0.72rem' }}
                             onClick={() => handleToggleSaveItem(bagObj, item.selectedColor)}
                           >
                             Remove
@@ -1562,6 +1640,7 @@ export default function App() {
                           <button
                             type="button"
                             className="btn-primary-sm"
+                            style={{ padding: '5px 9px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
                             disabled={stockCount <= 0}
                             onClick={() => handleAddToBag(bagObj, 1, item.selectedColor)}
                           >
@@ -1652,7 +1731,7 @@ export default function App() {
         </main>
       )}
 
-      {/* Footer (#5) */}
+      {/* Footer */}
       <footer className="site-footer">
         <div className="footer-inner">
           <div>
@@ -1695,7 +1774,97 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Bag Slide-Over Drawer & Mobile Nav */}
+      {/* Dedicated Mobile Navigation Drawer (3-Line Menu Button) */}
+      {mobileNavOpen && (
+        <div className="drawer-backdrop" onClick={() => setMobileNavOpen(false)}>
+          <aside
+            className="bag-drawer"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '300px' }}
+          >
+            <div className="drawer-header">
+              <h3 style={{ color: '#FFFFFF' }}>Menu</h3>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setMobileNavOpen(false)}
+                aria-label="Close navigation menu"
+                style={{ color: '#FFFFFF', backgroundColor: 'rgba(255,255,255,0.14)' }}
+              >
+                <X size={20} color="#FFFFFF" />
+              </button>
+            </div>
+
+            <div
+              className="drawer-body"
+              style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '16px' }}
+            >
+              <button
+                type="button"
+                className="btn-ghost-sm"
+                style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                onClick={() => { setView('home'); setMobileNavOpen(false); }}
+              >
+                <Home size={16} /> Home
+              </button>
+              <button
+                type="button"
+                className="btn-ghost-sm"
+                style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                onClick={() => { setView('shop'); setMobileNavOpen(false); }}
+              >
+                <Sparkles size={16} /> Collection ({bags.length})
+              </button>
+              <button
+                type="button"
+                className="btn-ghost-sm"
+                style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                onClick={() => { setView('saved'); setMobileNavOpen(false); }}
+              >
+                <Heart size={16} /> Saved ({savedItems.length})
+              </button>
+              {user?.role === 'customer' && (
+                <button
+                  type="button"
+                  className="btn-ghost-sm"
+                  style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                  onClick={() => { fetchOrders(); setView('orders'); setMobileNavOpen(false); }}
+                >
+                  <Truck size={16} /> My Orders ({orders.length})
+                </button>
+              )}
+              {isStaffOrAdmin && (
+                <button
+                  type="button"
+                  className="btn-ghost-sm"
+                  style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                  onClick={() => { setView('admin'); setMobileNavOpen(false); }}
+                >
+                  <ShieldCheck size={16} /> Staff Portal
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-ghost-sm"
+                style={{ justifyContent: 'flex-start', padding: '12px', gap: '10px', display: 'flex', alignItems: 'center' }}
+                onClick={() => { setMobileNavOpen(false); setContactOpen(true); }}
+              >
+                <MessageCircle size={16} /> Concierge
+              </button>
+              <button
+                type="button"
+                className="btn-primary full-width"
+                style={{ marginTop: '8px' }}
+                onClick={() => { setMobileNavOpen(false); setDrawerOpen(true); }}
+              >
+                Open Shopping Bag ({cartCount})
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Shopping Bag Slide-Over Drawer */}
       {drawerOpen && (
         <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}>
           <aside className="bag-drawer" onClick={(e) => e.stopPropagation()}>
@@ -1706,22 +1875,10 @@ export default function App() {
                 className="icon-btn"
                 onClick={() => setDrawerOpen(false)}
                 aria-label="Close bag"
-                style={{ color: '#FFFFFF', backgroundColor: 'rgba(255,255,255,0.12)' }}
+                style={{ color: '#FFFFFF', backgroundColor: 'rgba(255,255,255,0.14)' }}
               >
                 <X size={20} color="#FFFFFF" />
               </button>
-            </div>
-
-            <div className="drawer-mobile-links">
-              <button type="button" onClick={() => { setView('home'); setDrawerOpen(false); }}>Home</button>
-              <button type="button" onClick={() => { setView('shop'); setDrawerOpen(false); }}>Collection</button>
-              <button type="button" onClick={() => { setView('saved'); setDrawerOpen(false); }}>Saved ({savedItems.length})</button>
-              {user?.role === 'customer' && (
-                <button type="button" onClick={() => { setView('orders'); setDrawerOpen(false); }}>My Orders</button>
-              )}
-              {isStaffOrAdmin && (
-                <button type="button" onClick={() => { setView('admin'); setDrawerOpen(false); }}>Staff Portal</button>
-              )}
             </div>
 
             <div className="drawer-body">
@@ -2160,7 +2317,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Concierge Contact Modal (#5) */}
+      {/* Concierge Contact Modal */}
       {contactOpen && (
         <div className="modal-backdrop" onClick={() => setContactOpen(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
