@@ -1360,7 +1360,7 @@ export default function App() {
               <div className="empty-state-card">Loading collection...</div>
             ) : (
               <div className="bag-grid">
-                {bags.slice(0, 6).map((bag) => {
+                {bags.slice(0, 8).map((bag) => {
                   const totalStock = getBagTotalStock(bag);
                   const primaryColor = getBagPrimaryColor(bag);
                   const coverSrc = resolveBagImage(bag.image || bag.images?.[0]);
@@ -1774,13 +1774,13 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Dedicated Mobile Navigation Drawer (3-Line Menu Button) */}
+      {/* Dedicated Mobile Navigation Drawer (Opens on Left) */}
       {mobileNavOpen && (
         <div className="drawer-backdrop" onClick={() => setMobileNavOpen(false)}>
           <aside
-            className="bag-drawer"
+            className="mobile-drawer"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: '300px' }}
+            style={{ maxWidth: '300px', marginRight: 'auto', marginLeft: 0 }}
           >
             <div className="drawer-header">
               <h3 style={{ color: '#FFFFFF' }}>Menu</h3>
