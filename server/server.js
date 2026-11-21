@@ -1,1487 +1,2263 @@
-import crypto from 'crypto';
-import express from 'express';
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import axios from 'axios';
-import multer from 'multer';
-import { v2 as cloudinary } from 'cloudinary';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Menu,
+  X,
+  ShoppingBag,
+  User,
+  Search,
+  ChevronRight,
+  ChevronLeft,
+  Shield,
+  LogOut,
+  Minus,
+  Plus,
+  Trash2,
+  Package,
+  MapPin,
+  Mail,
+  Phone,
+  ArrowRight,
+  Sparkles,
+} from 'lucide-react';
+import StaffPortal from './components/StaffPortal';
+import AuthModal from './components/AuthModal';
+import { apiRequest } from './utils/api';
 
-import User from './models/User.js';
-import Bag from './models/Bag.js';
-import Collection from './models/Collection.js';
-import Order from './models/Order.js';
-import Settings from './models/Settings.js';
-import { protect, adminOnly, staffOnly } from './middleware/auth.js';
-import { customerOnly } from './middleware/customerOnly.js';
+const BAG_WEIGHT_KG = 3;
+const GEOAPIFY_API_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY || '';
 
-dotenv.config();
-const app = express();
+const NIGERIA_QUICK_LOCATIONS = [
+  { id: 'ng-ikeja', formatted: 'Ikeja, Lagos, Nigeria', state: 'Lagos', city: 'Ikeja', area: 'Ikeja', lat: 6.6018, lon: 3.3515 },
+  { id: 'ng-lekki', formatted: 'Lekki Phase 1, Lagos, Nigeria', state: 'Lagos', city: 'Lekki', area: 'Lekki Phase 1', lat: 6.4474, lon: 3.4723 },
+  { id: 'ng-vi', formatted: 'Victoria Island, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Victoria Island', lat: 6.4281, lon: 3.4219 },
+  { id: 'ng-surulere', formatted: 'Surulere, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Surulere', lat: 6.5059, lon: 3.3509 },
+  { id: 'ng-yaba', formatted: 'Yaba, Lagos, Nigeria', state: 'Lagos', city: 'Lagos', area: 'Yaba', lat: 6.5158, lon: 3.3769 },
+  { id: 'ng-ikorodu', formatted: 'Ikorodu, Lagos, Nigeria', state: 'Lagos', city: 'Ikorodu', area: 'Ikorodu', lat: 6.6194, lon: 3.5105 },
+  { id: 'ng-abeokuta', formatted: 'Abeokuta, Ogun, Nigeria', state: 'Ogun', city: 'Abeokuta', area: 'Abeokuta', lat: 7.1475, lon: 3.3619 },
+  { id: 'ng-ibadan', formatted: 'Ibadan, Oyo, Nigeria', state: 'Oyo', city: 'Ibadan', area: 'Ibadan', lat: 7.3775, lon: 3.947 },
+  { id: 'ng-abuja', formatted: 'Wuse II, Abuja, FCT, Nigeria', state: 'FCT', city: 'Abuja', area: 'Wuse II', lat: 9.0765, lon: 7.3986 },
+  { id: 'ng-ph', formatted: 'GRA, Port Harcourt, Rivers, Nigeria', state: 'Rivers', city: 'Port Harcourt', area: 'GRA', lat: 4.8156, lon: 7.0498 },
+  { id: 'ng-benin', formatted: 'Benin City, Edo, Nigeria', state: 'Edo', city: 'Benin City', area: 'Benin City', lat: 6.335, lon: 5.6037 },
+  { id: 'ng-enugu', formatted: 'Enugu, Enugu, Nigeria', state: 'Enugu', city: 'Enugu', area: 'Enugu', lat: 6.4584, lon: 7.5464 },
+  { id: 'ng-kano', formatted: 'Kano, Kano, Nigeria', state: 'Kano', city: 'Kano', area: 'Kano', lat: 12.0022, lon: 8.592 },
+];
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const isStaffRole = (role) => role === 'admin' || role === 'staff';
 
-const DEFAULT_BAG_WEIGHT_KG = Number(process.env.DEFAULT_BAG_WEIGHT_KG) || 3;
-const PICKUP_CONFIG = {
-  address: (process.env.PICKUP_ADDRESS || 'No. 1 Ifelodun, Community Road, Amikanle, Lagos').trim(),
-  city: (process.env.PICKUP_CITY || 'Lagos').trim(),
-  state: (process.env.PICKUP_STATE || 'Lagos').trim(),
-  country: 'Nigeria',
-  lat: Number(process.env.PICKUP_LAT) || 6.652,
-  lon: Number(process.env.PICKUP_LON) || 3.249,
-};
-
-const allowedOrigins = [
-  process.env.CLIENT_URL,
-  'https://www.singlechoice.ng',
-  'https://singlechoice.ng',
-  'https://single-choice-store.vercel.app',
-  'https://choice-store.vercel.app',
-  'http://localhost:5173',
-]
-  .filter(Boolean)
-  .map((url) => url.trim().replace(/\/+$/, ''));
-
-app.use(
-  cors({
-    origin(origin, callback) {
-      const normalizedOrigin = origin ? origin.trim().replace(/\/+$/, '') : '';
-      if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
-        return callback(null, true);
-      }
-      return callback(null, false);
-    },
-    credentials: true,
-  })
-);
-
-const extractCloudinaryPublicId = (url) => {
-  if (!url || !url.includes('res.cloudinary.com')) return null;
-  const parts = url.split('/upload/');
-  if (parts.length < 2) return null;
-  const afterUpload = parts[1].replace(/^v\d+\//, '');
-  return afterUpload.replace(/\.[^/.]+$/, '');
-};
-
-const signToken = (user) =>
-  jwt.sign(
-    { id: user._id, role: user.role, tokenVersion: user.tokenVersion },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-
-const sendBrevoEmail = async ({ toEmail, toName, subject, textContent, htmlContent, replyTo }) => {
-  const apiKey = (process.env.BREVO_API_KEY || '').trim();
-  const senderEmail = (process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || '1singlechoice@gmail.com').trim();
-  const senderName = (process.env.BREVO_SENDER_NAME || 'Single Choice').trim();
-
-  if (!apiKey) {
-    console.warn('BREVO_API_KEY is not set; skipping email send.');
-    return null;
+const getCartItemStock = (bag, selectedColor) => {
+  if (!bag) return 0;
+  const primaryColor = (bag.colorName || 'Classic').trim().toLowerCase();
+  const chosenColor = (selectedColor || bag.colorName || 'Classic').trim().toLowerCase();
+  if (chosenColor === primaryColor) {
+    return Math.max(0, Number(bag.stock ?? 0));
   }
+  const variant = (bag.variants || []).find(
+    (v) => (v.colorName || '').trim().toLowerCase() === chosenColor
+  );
+  return variant ? Math.max(0, Number(variant.stock ?? 0)) : Math.max(0, Number(bag.stock ?? 0));
+};
 
-  const payload = {
-    sender: { name: senderName, email: senderEmail },
-    to: [{ email: toEmail, name: toName || toEmail }],
-    subject,
-    ...(htmlContent && { htmlContent }),
-    ...(textContent && { textContent }),
-    ...(replyTo && { replyTo: { email: replyTo } }),
+export default function App() {
+  const [bags, setBags] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [selectedCollection, setSelectedCollection] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => localStorage.getItem('sc_token') || '');
+  const [authChecking, setAuthChecking] = useState(() => Boolean(localStorage.getItem('sc_token')));
+
+  const [activeView, setActiveView] = useState('storefront'); // 'storefront' | 'orders' | 'contact' | 'admin'
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  const [cart, setCart] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+
+  // Nationwide Nigeria Delivery & Sendbox Quote State
+  const [deliveryState, setDeliveryState] = useState('');
+  const [deliveryCity, setDeliveryCity] = useState('');
+  const [deliveryArea, setDeliveryArea] = useState('');
+  const [streetAddress, setStreetAddress] = useState('');
+  const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [coords, setCoords] = useState({ lat: null, lon: null });
+
+  const [locationQuery, setLocationQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  const [shippingQuotes, setShippingQuotes] = useState([]);
+  const [selectedCourier, setSelectedCourier] = useState(null);
+  const [loadingRates, setLoadingRates] = useState(false);
+  const [ratesError, setRatesError] = useState('');
+
+  const [checkingOut, setCheckingOut] = useState(false);
+
+  const [selectedBag, setSelectedBag] = useState(null);
+  const [selectedColor, setSelectedColor] = useState('');
+  const [selectedQty, setSelectedQty] = useState(1);
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0);
+
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authInitialMode, setAuthInitialMode] = useState('login');
+
+  const [contactForm, setContactForm] = useState({ name: '', email: '', phone: '', message: '' });
+  const [sendingContact, setSendingContact] = useState(false);
+
+  const [toast, setToast] = useState(null);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const loadBags = async () => {
+    try {
+      setLoadingCatalog(true);
+      const data = await apiRequest('/api/bags');
+      setBags(Array.isArray(data) ? data : []);
+    } catch (err) {
+      showToast('Could not load handbag catalog.', 'error');
+    } finally {
+      setLoadingCatalog(false);
+    }
   };
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      'api-key': apiKey,
+  const loadCollections = async () => {
+    try {
+      const data = await apiRequest('/api/collections');
+      setCollections(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const loadSettings = async () => {
+    try {
+      const data = await apiRequest('/api/settings');
+      setSettings(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const loadCart = useCallback(
+    async (activeToken = token, role = user?.role) => {
+      const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
+      if (!resolvedToken || isStaffRole(role)) {
+        setCart([]);
+        return;
+      }
+      try {
+        const data = await apiRequest('/api/cart', { token: resolvedToken });
+        setCart(Array.isArray(data) ? data : []);
+      } catch (err) {
+        if (err?.status !== 403) {
+          console.error(err);
+        }
+      }
     },
-    body: JSON.stringify(payload),
+    [token, user?.role]
+  );
+
+  const loadOrders = useCallback(
+    async (activeToken = token) => {
+      const resolvedToken = activeToken || localStorage.getItem('sc_token') || '';
+      if (!resolvedToken) return;
+      try {
+        setLoadingOrders(true);
+        const data = await apiRequest('/api/orders/my', { token: resolvedToken });
+        setOrders(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoadingOrders(false);
+      }
+    },
+    [token]
+  );
+
+  useEffect(() => {
+    loadBags();
+    loadCollections();
+    loadSettings();
+  }, []);
+
+  useEffect(() => {
+    const activeToken = token || localStorage.getItem('sc_token') || '';
+    if (!activeToken) {
+      setUser(null);
+      setCart([]);
+      setAuthChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAuthChecking(true);
+
+    apiRequest('/api/auth/me', { token: activeToken })
+      .then((res) => {
+        if (cancelled) return;
+        const resolvedUser = res?.user || res;
+        if (resolvedUser && (resolvedUser._id || resolvedUser.id || resolvedUser.email)) {
+          setUser(resolvedUser);
+          if (isStaffRole(resolvedUser.role)) {
+            setCart([]);
+            setCartOpen(false);
+            setCheckoutOpen(false);
+          } else {
+            loadCart(activeToken, resolvedUser.role);
+          }
+          loadOrders(activeToken);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err?.status === 401) {
+          localStorage.removeItem('sc_token');
+          setToken('');
+          setUser(null);
+          setCart([]);
+        } else {
+          console.warn('Auth check did not return 401; preserving session:', err);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAuthChecking(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, loadCart, loadOrders]);
+
+  useEffect(() => {
+    const activeToken = token || localStorage.getItem('sc_token') || '';
+    const params = new URLSearchParams(window.location.search);
+    const paymentRef = params.get('reference') || params.get('trxref');
+    if (!paymentRef || !activeToken || isStaffRole(user?.role)) return;
+
+    let cancelled = false;
+    apiRequest(`/api/checkout/verify/${encodeURIComponent(paymentRef)}`, { token: activeToken })
+      .then(() => {
+        if (cancelled) return;
+        window.history.replaceState({}, document.title, window.location.pathname);
+        showToast('Payment confirmed! Your order is now being processed.');
+        loadBags();
+        loadCart(activeToken, user?.role);
+        loadOrders(activeToken);
+        setActiveView('orders');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Payment verification error:', err);
+        loadOrders(activeToken);
+        setActiveView('orders');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.role, loadCart, loadOrders, showToast]);
+
+  const isStaff = Boolean(user && isStaffRole(user.role));
+  const totalCartItems = isStaff ? 0 : cart.reduce((sum, item) => sum + item.qty, 0);
+  const totalCartWeightKg = totalCartItems * BAG_WEIGHT_KG;
+  const cartSubtotal = isStaff ? 0 : cart.reduce((sum, item) => sum + (item.bag?.price || 0) * item.qty, 0);
+  const selectedDeliveryFee = selectedCourier ? Number(selectedCourier.fee || 0) : 0;
+  const grandTotal = cartSubtotal + selectedDeliveryFee;
+
+  const fetchCourierQuotes = useCallback(
+    async ({ addressText, stateVal, cityVal, areaVal, weightVal, latitude, longitude }) => {
+      const activeToken = token || localStorage.getItem('sc_token') || '';
+      const hasLocationSignal = Boolean(
+        (addressText && addressText.trim().length >= 2) ||
+          (stateVal && stateVal.trim().length >= 2) ||
+          (cityVal && cityVal.trim().length >= 2) ||
+          (areaVal && areaVal.trim().length >= 2)
+      );
+
+      if (!activeToken || !hasLocationSignal || weightVal <= 0) {
+        setShippingQuotes([]);
+        setSelectedCourier(null);
+        setRatesError('');
+        return;
+      }
+
+      setLoadingRates(true);
+      setRatesError('');
+      try {
+        const res = await apiRequest('/api/shipping/rates', {
+          token: activeToken,
+          method: 'POST',
+          body: JSON.stringify({
+            destinationAddress: addressText || [areaVal, cityVal, stateVal].filter(Boolean).join(', '),
+            state: stateVal || '',
+            city: cityVal || '',
+            area: areaVal || '',
+            weightKg: weightVal,
+            lat: typeof latitude === 'number' ? latitude : null,
+            lon: typeof longitude === 'number' ? longitude : null,
+          }),
+        });
+
+        const quotes = Array.isArray(res?.quotes) ? res.quotes : [];
+        setShippingQuotes(quotes);
+        if (quotes.length > 0) {
+          setSelectedCourier((prev) => {
+            if (prev) {
+              const matching = quotes.find((q) => q.id === prev.id || q.courierName === prev.courierName);
+              if (matching) return matching;
+            }
+            return quotes[0];
+          });
+        } else {
+          setSelectedCourier(null);
+        }
+      } catch (err) {
+        setRatesError(err.message || 'Could not fetch courier rates right now.');
+      } finally {
+        setLoadingRates(false);
+      }
+    },
+    [token]
+  );
+
+  useEffect(() => {
+    const query = locationQuery.trim();
+    if (!checkoutOpen || query.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const localMatches = NIGERIA_QUICK_LOCATIONS.filter((loc) =>
+      loc.formatted.toLowerCase().includes(query.toLowerCase())
+    );
+
+    if (!GEOAPIFY_API_KEY) {
+      setSuggestions(localMatches);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingSuggestions(true);
+        const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(
+          query
+        )}&filter=countrycode:ng&limit=6&apiKey=${encodeURIComponent(GEOAPIFY_API_KEY)}`;
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) {
+          setSuggestions(localMatches);
+          return;
+        }
+        const data = await response.json();
+        const features = Array.isArray(data?.features) ? data.features : [];
+        const mapped = features.map((feat, idx) => {
+          const props = feat.properties || {};
+          return {
+            id: props.place_id || `${idx}-${props.formatted || query}`,
+            formatted: props.formatted || query,
+            state: props.state || props.county || '',
+            city: props.city || props.town || props.suburb || props.district || '',
+            area: props.suburb || props.district || props.neighbourhood || props.name || '',
+            lat: typeof props.lat === 'number' ? props.lat : null,
+            lon: typeof props.lon === 'number' ? props.lon : null,
+          };
+        });
+        setSuggestions(mapped.length > 0 ? mapped : localMatches);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Geoapify autocomplete error:', err);
+          setSuggestions(localMatches);
+        }
+      } finally {
+        setLoadingSuggestions(false);
+      }
+    }, 220);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [locationQuery, checkoutOpen]);
+
+  useEffect(() => {
+    if (!checkoutOpen) return;
+    const timer = setTimeout(() => {
+      fetchCourierQuotes({
+        addressText: streetAddress || locationQuery,
+        stateVal: deliveryState,
+        cityVal: deliveryCity,
+        areaVal: deliveryArea,
+        weightVal: totalCartWeightKg,
+        latitude: coords.lat,
+        longitude: coords.lon,
+      });
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [
+    checkoutOpen,
+    streetAddress,
+    locationQuery,
+    deliveryState,
+    deliveryCity,
+    deliveryArea,
+    totalCartWeightKg,
+    coords.lat,
+    coords.lon,
+    fetchCourierQuotes,
+  ]);
+
+  const handleSelectSuggestion = (item) => {
+    setLocationQuery(item.formatted);
+    setStreetAddress(item.formatted);
+    setDeliveryState(item.state || '');
+    setDeliveryCity(item.city || '');
+    setDeliveryArea(item.area || item.city || item.state || '');
+    setCoords({ lat: item.lat, lon: item.lon });
+    setSuggestions([]);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('sc_token');
+    setToken('');
+    setUser(null);
+    setCart([]);
+    setCartOpen(false);
+    setCheckoutOpen(false);
+    setActiveView('storefront');
+    setMobileMenuOpen(false);
+    showToast('Signed out successfully.');
+  };
+
+  const handleAuthSuccess = (data) => {
+    const nextToken = data?.token || localStorage.getItem('sc_token') || '';
+    const nextUser = data?.user || null;
+    if (!nextToken || !nextUser) return;
+
+    localStorage.setItem('sc_token', nextToken);
+    setUser(nextUser);
+    setToken(nextToken);
+    setAuthChecking(false);
+    setAuthModalOpen(false);
+    showToast(`Welcome back, ${nextUser.name.split(' ')[0]}!`);
+
+    if (isStaffRole(nextUser.role)) {
+      setCart([]);
+      setCartOpen(false);
+      setCheckoutOpen(false);
+    } else {
+      loadCart(nextToken, nextUser.role);
+    }
+    loadOrders(nextToken);
+  };
+
+  const resolveBagImage = (imgUrl) => {
+    if (!imgUrl) return '';
+    if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) return imgUrl;
+    const backendBase = import.meta.env.VITE_API_URL || '';
+    return `${backendBase}${imgUrl.startsWith('/') ? '' : '/'}${imgUrl}`;
+  };
+
+  const navigateToCollection = (colName) => {
+    setSelectedCollection(colName);
+    setActiveView('storefront');
+    setMobileMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const navigateToPage = (view) => {
+    setActiveView(view);
+    setMobileMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (view === 'orders') loadOrders();
+  };
+
+  const openBagQuickView = (bag) => {
+    setSelectedBag(bag);
+    setSelectedColor(bag.colorName || 'Classic');
+    setSelectedQty(1);
+    setActivePhotoIndex(0);
+  };
+
+  const handleAddToBag = async (bag, color, qtyDelta = 1) => {
+    if (isStaffRole(user?.role)) {
+      showToast('Staff and admin accounts cannot purchase items.', 'error');
+      return;
+    }
+
+    const colorToUse = color || bag.colorName || 'Classic';
+    const activeToken = token || localStorage.getItem('sc_token') || '';
+    if (!activeToken) {
+      setAuthInitialMode('login');
+      setAuthModalOpen(true);
+      showToast('Please sign in to add pieces to your shopping bag.', 'error');
+      return;
+    }
+
+    const availableStock = getCartItemStock(bag, colorToUse);
+    if (qtyDelta > 0 && availableStock <= 0) {
+      showToast(`${bag.name} (${colorToUse}) is currently sold out.`, 'error');
+      return;
+    }
+
+    const existingCartItem = cart.find(
+      (item) =>
+        String(item.bag?._id || item.bag) === String(bag._id) &&
+        (item.selectedColor || bag.colorName || 'Classic').toLowerCase() === colorToUse.toLowerCase()
+    );
+    const currentInCart = Number(existingCartItem?.qty || 0);
+    if (qtyDelta > 0 && currentInCart + qtyDelta > availableStock) {
+      showToast(
+        `Only ${availableStock} ${availableStock === 1 ? 'piece' : 'pieces'} of ${bag.name} (${colorToUse}) available in stock.`,
+        'error'
+      );
+      return;
+    }
+
+    try {
+      const updatedCart = await apiRequest('/api/cart', {
+        token: activeToken,
+        method: 'POST',
+        body: JSON.stringify({ bagId: bag._id, qty: qtyDelta, selectedColor: colorToUse }),
+      });
+      setCart(Array.isArray(updatedCart) ? updatedCart : []);
+      if (qtyDelta > 0) {
+        showToast(`Added ${bag.name} (${colorToUse}) to bag.`);
+      }
+    } catch (err) {
+      showToast(err.message || 'Could not update bag.', 'error');
+    }
+  };
+
+  const handleRemoveFromCart = async (bagId, color) => {
+    if (isStaffRole(user?.role)) return;
+    try {
+      const query = color ? `?color=${encodeURIComponent(color)}` : '';
+      const updatedCart = await apiRequest(`/api/cart/${bagId}${query}`, {
+        token,
+        method: 'DELETE',
+      });
+      setCart(Array.isArray(updatedCart) ? updatedCart : []);
+      showToast('Removed item from shopping bag.');
+    } catch (err) {
+      showToast('Could not remove item.', 'error');
+    }
+  };
+
+  const handleInitializeCheckout = async (e) => {
+    e.preventDefault();
+    if (isStaffRole(user?.role)) {
+      showToast('Staff and admin accounts cannot place orders.', 'error');
+      return;
+    }
+    if (cart.length === 0) return;
+
+    const finalAddress = (streetAddress || locationQuery).trim();
+    const finalPhone = deliveryPhone.trim();
+    const finalArea = [deliveryArea, deliveryCity, deliveryState].filter(Boolean).join(', ') || locationQuery.trim();
+
+    if (!finalAddress || !finalArea) {
+      showToast('Please enter your destination state, city, area, and street address.', 'error');
+      return;
+    }
+    if (!finalPhone) {
+      showToast('Please enter a recipient phone or WhatsApp number.', 'error');
+      return;
+    }
+
+    for (const item of cart) {
+      const chosenColor = item.selectedColor || item.bag?.colorName || 'Classic';
+      const available = getCartItemStock(item.bag, chosenColor);
+      if (available < Number(item.qty || 1)) {
+        showToast(
+          available <= 0
+            ? `${item.bag?.name} (${chosenColor}) is sold out. Please remove it from your bag.`
+            : `Only ${available} left for ${item.bag?.name} (${chosenColor}). Please adjust your quantity.`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    setCheckingOut(true);
+    try {
+      const data = await apiRequest('/api/checkout/initialize', {
+        token,
+        method: 'POST',
+        body: JSON.stringify({
+          area: finalArea,
+          city: deliveryCity.trim(),
+          state: deliveryState.trim(),
+          streetAddress: finalAddress,
+          phone: finalPhone,
+          selectedCourier,
+          lat: coords.lat,
+          lon: coords.lon,
+        }),
+      });
+
+      if (data?.authorization_url && /^https?:\/\//i.test(data.authorization_url)) {
+        setCartOpen(false);
+        setCheckoutOpen(false);
+        window.location.assign(data.authorization_url);
+        return;
+      }
+
+      showToast('Order placed successfully! Awaiting payment confirmation.');
+      setCartOpen(false);
+      setCheckoutOpen(false);
+      loadCart(token, user?.role);
+      loadOrders(token);
+      navigateToPage('orders');
+    } catch (err) {
+      showToast(err.message || 'Could not initialize checkout.', 'error');
+    } finally {
+      setCheckingOut(false);
+    }
+  };
+
+  const handleContactSubmit = async (e) => {
+    e.preventDefault();
+    setSendingContact(true);
+    try {
+      const data = await apiRequest('/api/contact', {
+        method: 'POST',
+        body: JSON.stringify(contactForm),
+      });
+      showToast(data.message || 'Message sent to concierge.');
+      setContactForm({ name: '', email: '', phone: '', message: '' });
+    } catch (err) {
+      showToast(err.message || 'Could not send message.', 'error');
+    } finally {
+      setSendingContact(false);
+    }
+  };
+
+  const filteredBags = bags.filter((bag) => {
+    const matchesCol =
+      selectedCollection === 'All' || bag.category?.toLowerCase() === selectedCollection.toLowerCase();
+    const matchesSearch =
+      !searchQuery ||
+      bag.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      bag.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      bag.colorName?.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCol && matchesSearch;
   });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Brevo API error (${response.status}): ${errText}`);
-  }
+  const activeBagPresentation = selectedBag
+    ? (() => {
+        const primaryColor = selectedBag.colorName || 'Classic';
+        const isPrimary = selectedColor.toLowerCase() === primaryColor.toLowerCase();
+        const matchedVariant = !isPrimary
+          ? (selectedBag.variants || []).find(
+              (v) => v.colorName.toLowerCase() === selectedColor.toLowerCase()
+            )
+          : null;
 
-  return response.json();
-};
+        const variantPhotos = matchedVariant
+          ? [matchedVariant.image, ...(matchedVariant.images || [])].filter(Boolean)
+          : [];
+        const fallbackPhotos = [selectedBag.image, ...(selectedBag.images || [])].filter(Boolean);
 
-const sendCustomerOtpEmail = async (email, name, otp) => {
-  setImmediate(() => {
-    sendBrevoEmail({
-      toEmail: email,
-      toName: name,
-      replyTo: process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || '1singlechoice@gmail.com',
-      subject: `${otp} is your Single Choice account code`,
-      textContent: `Hi ${name},\n\nYour account confirmation code is: ${otp}\n\nThis code is valid for 10 minutes.`,
-      htmlContent: `
-        <div style="font-family: Georgia, serif; max-width: 500px; margin: auto; padding: 28px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
-          <h2 style="color: #142B22; margin-top: 0;">Hi ${name},</h2>
-          <p style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #444444;">
-            Please enter the confirmation code below to finish setting up your profile:
-          </p>
-          <div style="font-family: Arial, sans-serif; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #142B22; background: #FAF8F5; padding: 14px; text-align: center; margin: 20px 0; border: 1px solid #C5A059;">
-            ${otp}
+        const rawColors = [
+          {
+            colorName: primaryColor,
+            colorHex: selectedBag.colorHex || '#142B22',
+            stock: selectedBag.stock ?? 1,
+          },
+          ...(selectedBag.variants || []).map((v) => ({
+            colorName: v.colorName,
+            colorHex: v.colorHex || '#142B22',
+            stock: v.stock ?? 1,
+          })),
+        ];
+
+        const uniqueColors = rawColors.filter(
+          (c, idx, arr) => arr.findIndex((item) => item.colorName.toLowerCase() === c.colorName.toLowerCase()) === idx
+        );
+
+        return {
+          photos: variantPhotos.length > 0 ? variantPhotos : fallbackPhotos,
+          stock: isPrimary ? Number(selectedBag.stock ?? 0) : Number(matchedVariant?.stock ?? 0),
+          allColors: uniqueColors,
+        };
+      })()
+    : { photos: [], stock: 0, allColors: [] };
+
+  return (
+    <div className="site-wrapper">
+      {/* HEADER */}
+      <header className="site-header">
+        <div className="header-mobile-left desktop-hide">
+          <button
+            type="button"
+            className="icon-btn burger-btn"
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open mobile menu"
+          >
+            <Menu size={22} />
+          </button>
+        </div>
+
+        <div className="header-brand-wrap" onClick={() => navigateToCollection('All')} role="button" tabIndex={0}>
+          <span className="brand-logo-text">SINGLE CHOICE</span>
+        </div>
+
+        <nav className="header-nav-desktop mobile-hide">
+          <button
+            type="button"
+            className={`nav-link ${activeView === 'storefront' && selectedCollection === 'All' ? 'active' : ''}`}
+            onClick={() => navigateToCollection('All')}
+          >
+            All Handbags
+          </button>
+          {collections.map((col) => (
+            <button
+              key={col._id || col.name}
+              type="button"
+              className={`nav-link ${
+                activeView === 'storefront' && selectedCollection === col.name ? 'active' : ''
+              }`}
+              onClick={() => navigateToCollection(col.name)}
+            >
+              {col.name}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={`nav-link ${activeView === 'contact' ? 'active' : ''}`}
+            onClick={() => navigateToPage('contact')}
+          >
+            Concierge
+          </button>
+        </nav>
+
+        <div className="header-actions">
+          {isStaff && (
+            <button
+              type="button"
+              className="btn-secondary mobile-hide"
+              onClick={() => navigateToPage('admin')}
+              style={{ padding: '8px 12px', fontSize: '13px' }}
+            >
+              <Shield size={14} style={{ marginRight: '6px' }} />
+              Staff Portal
+            </button>
+          )}
+
+          {user ? (
+            <div className="mobile-hide" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => navigateToPage('orders')}
+                style={{ padding: '8px 14px', fontSize: '13px' }}
+              >
+                <User size={14} style={{ marginRight: '6px' }} />
+                {user.name.split(' ')[0]}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleLogout}
+                style={{ padding: '8px 10px', fontSize: '13px', borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                title="Sign Out"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : !authChecking ? (
+            <button
+              type="button"
+              className="btn-secondary mobile-hide"
+              onClick={() => {
+                setAuthInitialMode('login');
+                setAuthModalOpen(true);
+              }}
+              style={{ padding: '8px 14px', fontSize: '13px' }}
+            >
+              Sign In
+            </button>
+          ) : null}
+
+          {!isStaff && (
+            <button
+              type="button"
+              className="icon-btn bag-badge-btn"
+              onClick={() => setCartOpen(true)}
+              aria-label="Open shopping bag"
+            >
+              <ShoppingBag size={20} />
+              {totalCartItems > 0 && <span className="bag-badge-count">{totalCartItems}</span>}
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* MOBILE DRAWER */}
+      {mobileMenuOpen && (
+        <div
+          className="drawer-backdrop desktop-hide"
+          style={{ zIndex: 3000 }}
+          onClick={() => setMobileMenuOpen(false)}
+          role="presentation"
+        >
+          <aside className="mobile-drawer" onClick={(e) => e.stopPropagation()} aria-label="Mobile Navigation">
+            <div className="mobile-drawer-header">
+              <span className="brand-logo-text" style={{ fontSize: '18px' }}>SINGLE CHOICE</span>
+              <button
+                type="button"
+                className="drawer-close-btn"
+                onClick={() => setMobileMenuOpen(false)}
+                aria-label="Close mobile menu"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mobile-drawer-links">
+              <button
+                type="button"
+                className={`mobile-drawer-link ${selectedCollection === 'All' ? 'active' : ''}`}
+                onClick={() => navigateToCollection('All')}
+              >
+                <span>All Handbags ({bags.length})</span>
+                <ChevronRight size={16} />
+              </button>
+
+              {collections.map((col) => (
+                <button
+                  key={col._id || col.name}
+                  type="button"
+                  className={`mobile-drawer-link ${selectedCollection === col.name ? 'active' : ''}`}
+                  onClick={() => navigateToCollection(col.name)}
+                >
+                  <span>{col.name}</span>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+
+              <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '12px 0' }} />
+              <div className="drawer-section-label" style={{ fontSize: '10.5px', letterSpacing: '0.16em', color: 'var(--champagne-gold)', fontWeight: '700', margin: '8px 0 4px' }}>
+                CONCIERGE &amp; ACCOUNT
+              </div>
+
+              {isStaff && (
+                <button
+                  type="button"
+                  className={`mobile-drawer-link ${activeView === 'admin' ? 'active' : ''}`}
+                  onClick={() => navigateToPage('admin')}
+                >
+                  <span>Staff &amp; Inventory Portal</span>
+                  <Shield size={16} />
+                </button>
+              )}
+
+              {user ? (
+                <>
+                  <button
+                    type="button"
+                    className={`mobile-drawer-link ${activeView === 'orders' ? 'active' : ''}`}
+                    onClick={() => navigateToPage('orders')}
+                  >
+                    <span>My Orders ({orders.length})</span>
+                    <Package size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-drawer-link"
+                    onClick={() => navigateToPage('contact')}
+                  >
+                    <span>Client Concierge &amp; Contact</span>
+                    <ChevronRight size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-drawer-link danger"
+                    onClick={handleLogout}
+                  >
+                    <span>Sign Out ({user.name.split(' ')[0]})</span>
+                    <LogOut size={16} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="mobile-drawer-link"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setAuthInitialMode('login');
+                      setAuthModalOpen(true);
+                    }}
+                  >
+                    <span>Sign In / Create Account</span>
+                    <User size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-drawer-link"
+                    onClick={() => navigateToPage('contact')}
+                  >
+                    <span>Client Concierge &amp; Contact</span>
+                    <ChevronRight size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* MAIN VIEW CONTENT */}
+      <main className="main-content">
+        {activeView === 'admin' && isStaff ? (
+          <StaffPortal
+            user={user}
+            bags={bags}
+            collections={collections}
+            heroImage={settings?.heroImage || ''}
+            heroVideo={settings?.heroVideo || ''}
+            heroEyebrow={settings?.heroEyebrow || ''}
+            heroTitle={settings?.heroTitle || ''}
+            heroSubtitle={settings?.heroSubtitle || ''}
+            heroCtaText={settings?.heroCtaText || ''}
+            onRefreshBags={loadBags}
+            onRefreshCollections={loadCollections}
+            onRefreshSettings={loadSettings}
+            onRefreshCatalog={() => {
+              loadBags();
+              loadCollections();
+              loadSettings();
+            }}
+            onBackToStore={() => navigateToCollection('All')}
+            showToast={showToast}
+            onForceLogout={handleLogout}
+          />
+        ) : activeView === 'orders' && user ? (
+          <section className="page-container">
+            <div className="section-header-row">
+              <div>
+                <span className="eyebrow-gold">CLIENT ACCOUNT</span>
+                <h1 className="editorial-heading">My Orders &amp; Dispatch</h1>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => navigateToCollection('All')}
+              >
+                Continue Shopping
+              </button>
+            </div>
+
+            {loadingOrders ? (
+              <div className="empty-state-card">Loading your order history...</div>
+            ) : orders.length === 0 ? (
+              <div className="empty-state-card">
+                <Package size={36} strokeWidth={1.3} />
+                <h3>No Orders Placed Yet</h3>
+                <p>Explore our latest luxury handbag arrivals with nationwide Nigeria delivery.</p>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => navigateToCollection('All')}
+                >
+                  Explore Handbags
+                </button>
+              </div>
+            ) : (
+              <div className="orders-list">
+                {orders.map((order) => (
+                  <div key={order._id} className="order-card">
+                    <div className="order-card-top">
+                      <div>
+                        <span className="order-id">
+                          ORDER #{order._id.slice(-6).toUpperCase()}
+                        </span>
+                        <div className="order-date">
+                          {new Date(order.createdAt).toLocaleDateString('en-NG', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })}
+                        </div>
+                      </div>
+                      <span
+                        className={`status-pill ${
+                          order.paymentStatus === 'paid' ? 'paid' : 'pending'
+                        }`}
+                      >
+                        {order.paymentStatus === 'paid' ? 'Payment Confirmed' : 'Awaiting Transfer'}
+                      </span>
+                    </div>
+
+                    <div className="order-items-grid">
+                      {order.items.map((item, i) => (
+                        <div key={i} className="order-item-row">
+                          <span>
+                            {item.name} — Qty: {item.qty}
+                          </span>
+                          <strong>₦{(item.price * item.qty).toLocaleString()}</strong>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="order-card-footer">
+                      <div className="order-address">
+                        <MapPin size={14} />
+                        <span>
+                          {order.delivery?.streetAddress}, {order.delivery?.area}
+                          {order.delivery?.courierName ? ` • ${order.delivery.courierName}` : ''}
+                        </span>
+                      </div>
+                      <div className="order-total">
+                        Total: <strong>₦{Number(order.totalAmount || 0).toLocaleString()}</strong>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : activeView === 'contact' ? (
+          <section
+            className="page-container contact-section"
+            style={{
+              maxWidth: '1080px',
+              margin: '0 auto',
+              padding: '44px 20px 72px',
+            }}
+          >
+            <div
+              className="contact-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: '36px',
+                alignItems: 'start',
+              }}
+            >
+              <div className="contact-info-panel">
+                <span className="eyebrow-gold">CLIENT CONCIERGE</span>
+                <h1 className="editorial-heading" style={{ marginTop: '6px', marginBottom: '14px' }}>
+                  At Your Service
+                </h1>
+                <p
+                  className="editorial-copy"
+                  style={{
+                    color: 'var(--text-muted)',
+                    lineHeight: '1.65',
+                    fontSize: '15px',
+                    marginBottom: '28px',
+                  }}
+                >
+                  Need styling advice, additional close-up videos of a piece, or nationwide dispatch
+                  assistance across Nigeria? Reach out directly to our boutique concierge.
+                </p>
+
+                <div
+                  className="concierge-details"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '16px',
+                  }}
+                >
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <MapPin size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Nationwide Nigeria Dispatch
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        Dispatched from Amikanle, Lagos across all states in Nigeria
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <Mail size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Direct Concierge Email
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        1singlechoice@gmail.com
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    className="concierge-item"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '14px',
+                      padding: '16px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <Phone size={20} style={{ color: 'var(--forest-green)', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '14px', color: 'var(--forest-green)' }}>
+                        Dispatch Hours
+                      </strong>
+                      <span style={{ fontSize: '13.5px', color: 'var(--text-muted)' }}>
+                        Monday — Saturday, 9:00 AM — 7:00 PM WAT
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <form
+                className="contact-form-card"
+                onSubmit={handleContactSubmit}
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '28px 24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                }}
+              >
+                <h3
+                  style={{
+                    fontFamily: 'var(--font-serif)',
+                    fontSize: '21px',
+                    color: 'var(--forest-green)',
+                    margin: '0 0 4px',
+                  }}
+                >
+                  Send a Message
+                </h3>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={contactForm.name}
+                    onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                    placeholder="Your full name"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={contactForm.email}
+                    onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                    placeholder="you@example.com"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Phone / WhatsApp
+                  </label>
+                  <input
+                    type="tel"
+                    value={contactForm.phone}
+                    onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
+                    placeholder="+234 800 000 0000"
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--forest-green)' }}>
+                    Message *
+                  </label>
+                  <textarea
+                    rows={4}
+                    required
+                    value={contactForm.message}
+                    onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
+                    placeholder="Tell us which handbag you are interested in..."
+                    style={{
+                      width: '100%',
+                      padding: '11px 12px',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      fontSize: '14px',
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <button type="submit" className="btn-primary full-width" disabled={sendingContact}>
+                  {sendingContact ? 'Sending Message...' : 'Send to Concierge'}
+                </button>
+              </form>
+            </div>
+          </section>
+        ) : (
+          <>
+            {selectedCollection === 'All' && !searchQuery && (
+              <section className="hero-banner">
+                {settings?.heroVideo ? (
+                  <video
+                    className="hero-media"
+                    src={resolveBagImage(settings.heroVideo)}
+                    poster={settings?.heroImage ? resolveBagImage(settings.heroImage) : undefined}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                  />
+                ) : settings?.heroImage ? (
+                  <img
+                    className="hero-media"
+                    src={resolveBagImage(settings.heroImage)}
+                    alt="Single Choice Luxury Collection"
+                  />
+                ) : (
+                  <div className="hero-fallback-bg" />
+                )}
+
+                <div className="hero-overlay">
+                  <div className="hero-content">
+                    <span className="hero-eyebrow">
+                      <Sparkles size={13} /> {settings?.heroEyebrow || 'SINGLE CHOICE • CAMPAIGN 2026'}
+                    </span>
+                    <h1 className="hero-title">{settings?.heroTitle || 'The Art of Carrying'}</h1>
+                    <p className="hero-subtitle">
+                      {settings?.heroSubtitle || 'Curated designer silhouettes crafted for timeless presence.'}
+                    </p>
+                    <div className="hero-actions">
+                      <a href="#catalog-grid" className="btn-gold">
+                        {settings?.heroCtaText || 'Discover the Collection'} <ArrowRight size={16} />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            <section id="catalog-grid" className="catalog-section">
+              <div className="catalog-toolbar">
+                <div className="collection-pills">
+                  <button
+                    type="button"
+                    className={`pill-btn ${selectedCollection === 'All' ? 'active' : ''}`}
+                    onClick={() => setSelectedCollection('All')}
+                  >
+                    All Pieces ({bags.length})
+                  </button>
+                  {collections.map((col) => (
+                    <button
+                      key={col._id || col.name}
+                      type="button"
+                      className={`pill-btn ${selectedCollection === col.name ? 'active' : ''}`}
+                      onClick={() => setSelectedCollection(col.name)}
+                    >
+                      {col.name}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search handbags, colors..."
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      className="clear-search-btn"
+                      onClick={() => setSearchQuery('')}
+                      aria-label="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="catalog-heading-row">
+                <div>
+                  <span className="eyebrow-gold">CURATED SELECTION</span>
+                  <h2 className="section-title">
+                    {selectedCollection === 'All' ? 'All Handbags' : selectedCollection}
+                  </h2>
+                </div>
+                <span className="piece-count">
+                  {filteredBags.length} {filteredBags.length === 1 ? 'Piece' : 'Pieces'} Available
+                </span>
+              </div>
+
+              {loadingCatalog ? (
+                <div className="bags-grid">
+                  {[1, 2, 3, 4].map((n) => (
+                    <div key={n} className="bag-card skeleton-card">
+                      <div className="skeleton-img" />
+                      <div className="skeleton-line" />
+                      <div className="skeleton-line short" />
+                    </div>
+                  ))}
+                </div>
+              ) : filteredBags.length === 0 ? (
+                <div className="empty-state-card">
+                  <h3>No Handbags Found</h3>
+                  <p>No available pieces matched your current filter.</p>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      setSelectedCollection('All');
+                      setSearchQuery('');
+                    }}
+                  >
+                    Show All Handbags
+                  </button>
+                </div>
+              ) : (
+                <div className="bags-grid">
+                  {filteredBags.map((bag) => {
+                    const colorSwatches = [
+                      {
+                        colorName: bag.colorName || 'Classic',
+                        colorHex: bag.colorHex || '#142B22',
+                      },
+                      ...(bag.variants || []).map((v) => ({
+                        colorName: v.colorName,
+                        colorHex: v.colorHex || '#142B22',
+                      })),
+                    ];
+
+                    return (
+                      <article
+                        key={bag._id}
+                        className="bag-card"
+                        onClick={() => openBagQuickView(bag)}
+                      >
+                        <div className="bag-image-wrap">
+                          <img
+                            src={resolveBagImage(bag.image || bag.images?.[0])}
+                            alt={bag.name}
+                            loading="lazy"
+                          />
+                          <span className="bag-category-tag">{bag.category}</span>
+                        </div>
+
+                        <div className="bag-card-body">
+                          <div className="bag-title-row">
+                            <h3 className="bag-name">{bag.name}</h3>
+                            <span className="bag-price">₦{Number(bag.price).toLocaleString()}</span>
+                          </div>
+
+                          <div className="bag-meta-row">
+                            <div className="swatch-row">
+                              {colorSwatches.map((sw, idx) => (
+                                <span
+                                  key={idx}
+                                  className="color-dot"
+                                  style={{ backgroundColor: sw.colorHex }}
+                                  title={sw.colorName}
+                                />
+                              ))}
+                              <span className="color-label">
+                                {colorSwatches.length > 1 ? `${colorSwatches.length} Colors` : colorSwatches[0].colorName}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              className="quick-add-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openBagQuickView(bag);
+                              }}
+                            >
+                              Select
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </main>
+
+      {/* FOOTER */}
+      <footer className="site-footer">
+        <div className="footer-inner">
+          <div>
+            <div className="footer-brand">SINGLE CHOICE</div>
+            <p className="footer-tagline">
+              Luxury handbags delivered nationwide across Nigeria with live courier rate shopping
+              and secure Paystack checkout.
+            </p>
+          </div>
+
+          <div className="footer-links">
+            <button type="button" onClick={() => navigateToCollection('All')}>
+              Shop All
+            </button>
+            <button type="button" onClick={() => navigateToPage('contact')}>
+              Client Concierge
+            </button>
+            {user && (
+              <button type="button" onClick={() => navigateToPage('orders')}>
+                My Orders
+              </button>
+            )}
           </div>
         </div>
-      `,
-    }).catch((err) => console.error('OTP email error:', err.message));
-  });
-};
-
-const sendOrderEmails = async (order, customer, stage = 'placed') => {
-  const boutiqueEmail = (process.env.CONCIERGE_TO_EMAIL || '1singlechoice@gmail.com').trim();
-  const shortOrderId = order._id.toString().slice(-6).toUpperCase();
-  const isPaid = stage === 'paid' || order.paymentStatus === 'paid';
-  const statusLabel = isPaid ? 'PAYMENT CONFIRMED (PAID)' : 'NEW ORDER PLACED (AWAITING TRANSFER)';
-
-  const itemsText = order.items
-    .map(
-      (item) =>
-        `• ${item.name} — Qty: ${item.qty} × ₦${item.price.toLocaleString()} = ₦${(
-          item.price * item.qty
-        ).toLocaleString()}`
-    )
-    .join('\n');
-
-  const deliveryFee = Number(order.delivery?.fee ?? order.deliveryFee ?? 0);
-  const courierText = order.delivery?.courierName ? `\nCourier: ${order.delivery.courierName}` : '';
-
-  setImmediate(() => {
-    sendBrevoEmail({
-      toEmail: boutiqueEmail,
-      toName: 'Single Choice Concierge',
-      replyTo: customer.email,
-      subject: `[${isPaid ? 'PAID ORDER' : 'ORDER PLACED'}] #${shortOrderId} — ${customer.name} (${order.delivery.area})`,
-      textContent: `${statusLabel} (#${shortOrderId})\n\nCustomer: ${customer.name} (${customer.email})\nPhone: ${order.delivery.phone}\nAddress: ${order.delivery.streetAddress}, ${order.delivery.area}${courierText}\n\nItems:\n${itemsText}\n\nSubtotal: ₦${Number(order.subtotal || 0).toLocaleString()}\nDelivery Fee: ₦${deliveryFee.toLocaleString()}\nTotal: ₦${Number(order.totalAmount || 0).toLocaleString()}`,
-    }).catch((err) => console.error('Admin order email error:', err.message));
-  });
-};
-
-const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
-  if (
-    lat1 === null || lat1 === undefined || lat1 === '' ||
-    lon1 === null || lon1 === undefined || lon1 === '' ||
-    lat2 === null || lat2 === undefined || lat2 === '' ||
-    lon2 === null || lat2 === undefined || lat2 === ''
-  ) {
-    return null;
-  }
-
-  const nLat1 = Number(lat1);
-  const nLon1 = Number(lon1);
-  const nLat2 = Number(lat2);
-  const nLon2 = Number(lon2);
-
-  if (!Number.isFinite(nLat1) || !Number.isFinite(nLon1) || !Number.isFinite(nLat2) || !Number.isFinite(nLon2)) {
-    return null;
-  }
-
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const R = 6371;
-  const dLat = toRad(nLat2 - nLat1);
-  const dLon = toRad(nLon2 - nLon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(nLat1)) * Math.cos(toRad(nLat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
-
-const buildFallbackNigeriaQuotes = ({ destinationAddress, city, area, state, weightKg, lat, lon }) => {
-  const combinedLocation = `${destinationAddress || ''} ${area || ''} ${city || ''} ${state || ''}`
-    .trim()
-    .toLowerCase();
-  const safeWeight = Math.max(0.5, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
-  const weightMultiplier = Math.max(1, Math.ceil(safeWeight / DEFAULT_BAG_WEIGHT_KG));
-
-  const hasValidCoords =
-    lat !== null &&
-    lat !== undefined &&
-    lat !== '' &&
-    lon !== null &&
-    lon !== undefined &&
-    lon !== '';
-
-  const distanceKm = hasValidCoords
-    ? calculateDistanceKm(PICKUP_CONFIG.lat, PICKUP_CONFIG.lon, lat, lon)
-    : null;
-
-  const isLagos =
-    combinedLocation.includes('lagos') ||
-    ['ikeja', 'lekki', 'victoria island', 'yaba', 'surulere', 'ajah', 'amikanle', 'ikorodu', 'badagry', 'epe', 'agege', 'alimosho', 'ogba', 'maryland'].some(
-      (loc) => combinedLocation.includes(loc)
-    );
-
-  const isSouthWest = ['ogun', 'abeokuta', 'oyo', 'ibadan', 'osun', 'osogbo', 'ondo', 'akure', 'ekiti', 'ado-ekiti'].some(
-    (loc) => combinedLocation.includes(loc)
-  );
-
-  const isSouthSouthOrSouthEast = [
-    'rivers', 'port harcourt', 'edo', 'benin', 'delta', 'asaba', 'warri',
-    'anambra', 'awka', 'onitsha', 'enugu', 'imo', 'owerri', 'abia', 'aba', 'umuahia',
-    'akwa ibom', 'uyo', 'cross river', 'calabar', 'bayelsa', 'yenagoa',
-  ].some((loc) => combinedLocation.includes(loc));
-
-  const isAbujaOrNorth = [
-    'abuja', 'fct', 'wuse', 'maitama', 'garki', 'gwagwalada',
-    'kano', 'kaduna', 'niger', 'minna', 'kwara', 'ilorin', 'plateau', 'jos',
-    'bauchi', 'gombe', 'adamawa', 'yola', 'borno', 'maiduguri', 'sokoto', 'katsina', 'zamfara', 'kebbi', 'jigawa', 'taraba', 'yobe', 'kogi', 'benue', 'nasarawa',
-  ].some((loc) => combinedLocation.includes(loc));
-
-  let baseStandard = 9500;
-  let standardEta = '2 - 4 business days';
-  let expressDelta = 3500;
-  let expressEta = '1 - 2 business days';
-
-  if (distanceKm !== null) {
-    if (distanceKm <= 25) {
-      baseStandard = 2500;
-      standardEta = 'Same day / Next day';
-      expressDelta = 1500;
-      expressEta = 'Same day express';
-    } else if (distanceKm <= 65) {
-      baseStandard = 4000;
-      standardEta = 'Same day / Next day';
-      expressDelta = 2000;
-      expressEta = 'Same day express';
-    } else if (distanceKm <= 220) {
-      baseStandard = 5800;
-      standardEta = '1 - 2 business days';
-      expressDelta = 2500;
-      expressEta = '1 business day';
-    } else if (distanceKm <= 550) {
-      baseStandard = 7800;
-      standardEta = '2 - 3 business days';
-      expressDelta = 3000;
-      expressEta = '1 - 2 business days';
-    } else {
-      baseStandard = 9800;
-      standardEta = '2 - 4 business days';
-      expressDelta = 3500;
-      expressEta = '1 - 2 business days';
-    }
-  } else if (isLagos) {
-    baseStandard = 3000;
-    standardEta = 'Same day / Next day';
-    expressDelta = 2000;
-    expressEta = 'Same day express';
-  } else if (isSouthWest) {
-    baseStandard = 5500;
-    standardEta = '1 - 2 business days';
-    expressDelta = 2500;
-    expressEta = '1 business day';
-  } else if (isSouthSouthOrSouthEast) {
-    baseStandard = 7500;
-    standardEta = '2 - 3 business days';
-    expressDelta = 3000;
-    expressEta = '1 - 2 business days';
-  } else if (isAbujaOrNorth) {
-    baseStandard = 9000;
-    standardEta = '2 - 4 business days';
-    expressDelta = 3500;
-    expressEta = '1 - 2 business days';
-  }
-
-  const standardFee = Math.round((baseStandard * weightMultiplier) / 100) * 100;
-  const expressFee = Math.round(((baseStandard + expressDelta) * weightMultiplier) / 100) * 100;
-
-  return [
-    {
-      id: 'gig-standard',
-      courierName: 'GIG Logistics',
-      serviceName: 'Standard Nationwide Dispatch',
-      fee: standardFee,
-      eta: standardEta,
-      isFallback: true,
-    },
-    {
-      id: 'dhl-express',
-      courierName: 'DHL Express Nigeria',
-      serviceName: 'Priority Courier',
-      fee: expressFee,
-      eta: expressEta,
-      isFallback: true,
-    },
-    {
-      id: 'redstar-standard',
-      courierName: 'Red Star Express',
-      serviceName: 'Nationwide Delivery',
-      fee: Math.round(((baseStandard + 1200) * weightMultiplier) / 100) * 100,
-      eta: standardEta,
-      isFallback: true,
-    },
-  ];
-};
-
-const fetchSendboxQuotes = async ({ destinationAddress, state, city, area, weightKg, lat, lon }) => {
-  const apiKey = (process.env.SENDBOX_API_KEY || '').trim();
-  const baseUrl = (process.env.SENDBOX_BASE_URL || 'https://live.sendbox.co').trim().replace(/\/+$/, '');
-  const cleanWeight = Math.max(0.5, Number(weightKg) || DEFAULT_BAG_WEIGHT_KG);
-
-  const fullDestination = [destinationAddress, area, city, state, 'Nigeria']
-    .map((part) => (part || '').trim())
-    .filter(Boolean)
-    .join(', ');
-
-  if (!apiKey) {
-    return {
-      quotes: buildFallbackNigeriaQuotes({
-        destinationAddress,
-        city,
-        area,
-        state,
-        weightKg: cleanWeight,
-        lat,
-        lon,
-      }),
-      source: 'estimated_fallback',
-    };
-  }
-
-  try {
-    const payload = {
-      origin_name: 'Single Choice',
-      origin_street_address: PICKUP_CONFIG.address,
-      origin_city: PICKUP_CONFIG.city,
-      origin_state: PICKUP_CONFIG.state,
-      origin_country: PICKUP_CONFIG.country,
-      destination_name: 'Customer Delivery',
-      destination_street_address: fullDestination,
-      destination_city: (city || area || state || 'Lagos').trim(),
-      destination_state: (state || 'Lagos').trim(),
-      destination_country: 'Nigeria',
-      ...(typeof lat === 'number' && !Number.isNaN(lat) ? { destination_lat: lat } : {}),
-      ...(typeof lon === 'number' && !Number.isNaN(lon) ? { destination_lon: lon } : {}),
-      weight: cleanWeight,
-      weight_unit: 'kg',
-      items: [
-        {
-          name: 'Luxury Handbag',
-          quantity: Math.max(1, Math.round(cleanWeight / DEFAULT_BAG_WEIGHT_KG)),
-          weight: cleanWeight,
-          weight_unit: 'kg',
-        },
-      ],
-    };
-
-    const response = await axios.post(`${baseUrl}/api/v1/merchant/shipments/delivery_quote`, payload, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      timeout: 12000,
-    });
-
-    const rawList =
-      response.data?.rates ||
-      response.data?.quotes ||
-      response.data?.data?.rates ||
-      response.data?.data?.quotes ||
-      (Array.isArray(response.data?.data) ? response.data.data : []);
-
-    const normalizedQuotes = (Array.isArray(rawList) ? rawList : [])
-      .map((q, index) => {
-        const rawFee =
-          q?.fee ?? q?.amount ?? q?.total ?? q?.delivery_fee ?? q?.rate ?? q?.price ?? null;
-        const numericFee = Number(rawFee);
-        if (!Number.isFinite(numericFee) || numericFee <= 0) return null;
-
-        const courierName =
-          q?.courier_name ||
-          q?.courier?.name ||
-          q?.carrier_name ||
-          q?.name ||
-          `Courier Option ${index + 1}`;
-        const serviceName = q?.service_name || q?.service_type || q?.mode || 'Courier Delivery';
-        const eta =
-          q?.eta ||
-          q?.delivery_time ||
-          q?.duration ||
-          q?.estimated_delivery ||
-          '1 - 4 business days';
-
-        return {
-          id: String(q?.id || q?.quote_id || q?.service_code || `${courierName}-${index}`),
-          courierName: String(courierName).trim(),
-          serviceName: String(serviceName).trim(),
-          fee: Math.round(numericFee),
-          eta: String(eta).trim(),
-          raw: q,
-        };
-      })
-      .filter(Boolean);
-
-    if (normalizedQuotes.length > 0) {
-      normalizedQuotes.sort((a, b) => a.fee - b.fee);
-      return {
-        quotes: normalizedQuotes,
-        source: 'sendbox_live',
-      };
-    }
-
-    return {
-      quotes: buildFallbackNigeriaQuotes({
-        destinationAddress,
-        city,
-        area,
-        state,
-        weightKg: cleanWeight,
-        lat,
-        lon,
-      }),
-      source: 'estimated_fallback',
-    };
-  } catch (err) {
-    console.warn('Sendbox rate lookup fallback triggered:', err.response?.data || err.message);
-    return {
-      quotes: buildFallbackNigeriaQuotes({
-        destinationAddress,
-        city,
-        area,
-        state,
-        weightKg: cleanWeight,
-        lat,
-        lon,
-      }),
-      source: 'estimated_fallback',
-    };
-  }
-};
-
-const fulfillPaidOrder = async (reference) => {
-  if (!reference) return null;
-
-  const existingOrder = await Order.findOne({ paystackReference: reference });
-  if (!existingOrder) return null;
-  if (existingOrder.paymentStatus === 'paid' && existingOrder.fulfilledAt) {
-    return existingOrder;
-  }
-
-  const confirmedOrder = await Order.findOneAndUpdate(
-    {
-      paystackReference: reference,
-      $or: [{ paymentStatus: { $ne: 'paid' } }, { fulfilledAt: null }],
-    },
-    {
-      $set: {
-        paymentStatus: 'paid',
-        fulfilledAt: existingOrder.fulfilledAt || new Date(),
-      },
-    },
-    { new: true }
-  );
-
-  if (!confirmedOrder) {
-    return Order.findOne({ paystackReference: reference });
-  }
-
-  const user = await User.findById(confirmedOrder.customer);
-
-  // Deduct stock based on confirmedOrder.items so fulfillment never depends on an active cart session
-  for (const item of confirmedOrder.items || []) {
-    const qtyToDeduct = Math.max(1, Number(item.qty || 1));
-    const bag = item.bagId
-      ? await Bag.findById(item.bagId)
-      : item.bagName
-      ? await Bag.findOne({ name: item.bagName })
-      : null;
-
-    if (!bag) continue;
-
-    const primaryColor = (bag.colorName || 'Classic').toLowerCase();
-    const chosenColor = (item.selectedColor || bag.colorName || 'Classic').trim().toLowerCase();
-
-    if (chosenColor === primaryColor) {
-      bag.stock = Math.max(0, Number(bag.stock ?? 1) - qtyToDeduct);
-    } else {
-      const variant = (bag.variants || []).find(
-        (v) => (v.colorName || '').trim().toLowerCase() === chosenColor
-      );
-      if (variant) {
-        variant.stock = Math.max(0, Number(variant.stock ?? 1) - qtyToDeduct);
-      } else {
-        bag.stock = Math.max(0, Number(bag.stock ?? 1) - qtyToDeduct);
-      }
-    }
-
-    const totalRemaining =
-      Number(bag.stock ?? 0) +
-      (bag.variants || []).reduce((sum, v) => sum + Number(v.stock ?? 0), 0);
-    bag.inStock = totalRemaining > 0;
-    await bag.save();
-  }
-
-  if (user && Array.isArray(user.cart) && user.cart.length > 0) {
-    user.cart = [];
-    await user.save();
-  }
-
-  if (user) {
-    await sendOrderEmails(confirmedOrder, user, 'paid').catch(() => {});
-  }
-
-  return confirmedOrder;
-};
-
-// Paystack Webhook Endpoint (must use express.raw before express.json)
-app.post(
-  '/api/webhooks/paystack',
-  express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    try {
-      const secret = (process.env.PAYSTACK_SECRET_KEY || '').trim();
-      const signature = req.headers['x-paystack-signature'];
-
-      if (!secret) {
-        console.warn('PAYSTACK_SECRET_KEY not set; ignoring Paystack webhook.');
-        return res.status(200).json({ received: true });
-      }
-
-      if (!signature || typeof signature !== 'string') {
-        return res.status(401).json({ message: 'Missing Paystack signature.' });
-      }
-
-      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
-      const expectedHash = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
-
-      const sigBuf = Buffer.from(signature, 'utf8');
-      const expBuf = Buffer.from(expectedHash, 'utf8');
-      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-        return res.status(401).json({ message: 'Invalid Paystack webhook signature.' });
-      }
-
-      const event = JSON.parse(rawBody.toString('utf8'));
-      const reference = event?.data?.reference;
-
-      if (event?.event === 'charge.success' && reference) {
-        await fulfillPaidOrder(String(reference));
-      } else if (event?.event === 'charge.failed' && reference) {
-        await Order.findOneAndUpdate(
-          { paystackReference: String(reference), paymentStatus: 'pending' },
-          { $set: { paymentStatus: 'failed' } }
-        );
-      }
-
-      return res.status(200).json({ received: true });
-    } catch (err) {
-      console.error('Paystack webhook error:', err.message);
-      return res.status(500).json({ message: 'Webhook processing error.' });
-    }
-  }
-);
-
-app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'Single Choice API' });
-});
-
-app.post('/api/webhooks/sendbox', (req, res) => {
-  console.log('Sendbox webhook event received:', req.body);
-  res.status(200).json({ received: true });
-});
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'single-choice-handbags',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 },
-});
-
-const videoStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'single-choice-campaigns',
-    resource_type: 'video',
-    allowed_formats: ['mp4', 'webm', 'mov'],
-  },
-});
-
-const uploadVideo = multer({
-  storage: videoStorage,
-  limits: { fileSize: 80 * 1024 * 1024 },
-});
-
-const seedInitialData = async () => {
-  const adminExists = await User.findOne({ role: 'admin' });
-  if (!adminExists) {
-    const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD || 'ChangeMe123!', 10);
-    await User.create({
-      name: process.env.ADMIN_NAME || 'Single Choice Admin',
-      email: process.env.ADMIN_EMAIL || 'admin@singlechoice.ng',
-      password: hashedPassword,
-      role: 'admin',
-      isVerified: true,
-    });
-  }
-
-  const settingsExist = await Settings.findOne({ key: 'storefront' });
-  if (!settingsExist) {
-    await Settings.create({
-      key: 'storefront',
-      heroEyebrow: 'SINGLE CHOICE • CAMPAIGN 2026',
-      heroTitle: 'The Art of Carrying',
-      heroSubtitle:
-        'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
-      heroCtaText: 'Discover the Collection',
-    });
-  }
-
-  const colCount = await Collection.countDocuments();
-  if (colCount === 0) {
-    await Collection.insertMany([
-      { name: 'Tote Bags' },
-      { name: 'Crossbody' },
-      { name: 'Clutches' },
-      { name: 'New Arrivals' },
-    ]);
-  }
-};
-
-// Admin Worker Management Routes
-app.get('/api/admin/workers', protect, adminOnly, async (req, res) => {
-  try {
-    const workers = await User.find({ role: { $in: ['worker', 'staff', 'admin'] } })
-      .select('name email role isActive createdAt')
-      .sort({ createdAt: -1 });
-    res.json({ workers });
-  } catch (err) {
-    res.status(500).json({ message: err.message || 'Could not load workers.' });
-  }
-});
-
-app.post('/api/admin/workers', protect, adminOnly, async (req, res) => {
-  try {
-    const name = String(req.body?.name || '').trim();
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const role = req.body?.role === 'admin' ? 'admin' : 'staff';
-    const rawPassword = String(req.body?.password || '');
-
-    if (!email) {
-      return res.status(400).json({ message: 'Worker email is required.' });
-    }
-
-    const generatedPassword = rawPassword || `${Math.random().toString(36).slice(-8)}A1!`;
-    let worker = await User.findOne({ email });
-    const isNewAccount = !worker;
-
-    if (worker) {
-      worker.role = role;
-      worker.isActive = true;
-      worker.isVerified = true;
-      if (name) worker.name = name;
-      if (rawPassword) {
-        worker.password = await bcrypt.hash(rawPassword, 10);
-      }
-      await worker.save();
-    } else {
-      const hashedPassword = await bcrypt.hash(generatedPassword, 10);
-      worker = await User.create({
-        name: name || email.split('@')[0],
-        email,
-        password: hashedPassword,
-        role,
-        isActive: true,
-        isVerified: true,
-      });
-    }
-
-    setImmediate(() => {
-      sendBrevoEmail({
-        toEmail: worker.email,
-        toName: worker.name,
-        subject: 'Your Single Choice Staff Portal Access',
-        textContent: `Hi ${worker.name},\n\nYou have been granted ${role} access to the Single Choice portal at https://www.singlechoice.ng.\n\nEmail: ${worker.email}${
-          rawPassword || isNewAccount ? `\nPassword: ${generatedPassword}` : ''
-        }\n\nPlease sign in with your credentials.`,
-      }).catch((err) => console.error('Worker welcome email error:', err.message));
-    });
-
-    res.status(201).json({
-      worker: {
-        _id: worker._id,
-        name: worker.name,
-        email: worker.email,
-        role: worker.role,
-        isActive: worker.isActive,
-      },
-    });
-  } catch (err) {
-    res.status(400).json({ message: err.message || 'Could not add worker.' });
-  }
-});
-
-app.delete('/api/admin/workers/:id', protect, adminOnly, async (req, res) => {
-  try {
-    const target = await User.findById(req.params.id);
-    if (!target) {
-      return res.status(404).json({ message: 'Worker not found.' });
-    }
-
-    if (target._id.toString() === req.user._id.toString()) {
-      return res.status(400).json({ message: 'You cannot revoke your own admin access.' });
-    }
-
-    target.role = 'customer';
-    target.tokenVersion = (target.tokenVersion || 0) + 1;
-    await target.save();
-
-    res.json({
-      message: 'Worker access revoked.',
-      worker: {
-        _id: target._id,
-        name: target.name,
-        email: target.email,
-        role: target.role,
-        isActive: target.isActive,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message || 'Could not revoke worker access.' });
-  }
-});
-
-app.post('/api/contact', async (req, res) => {
-  try {
-    const { name, email, phone, subject, message } = req.body;
-    if (!name?.trim() || !email?.trim() || !message?.trim()) {
-      return res.status(400).json({ message: 'Please enter your name, email, and message.' });
-    }
-
-    const boutiqueEmail = (process.env.CONCIERGE_TO_EMAIL || '1singlechoice@gmail.com').trim();
-    const cleanName = name.trim();
-    const cleanEmail = email.trim();
-    const cleanPhone = (phone || '').trim();
-    const cleanSubject = (subject || '').trim();
-    const cleanMessage = message.trim();
-
-    await sendBrevoEmail({
-      toEmail: boutiqueEmail,
-      toName: 'Single Choice Concierge',
-      replyTo: cleanEmail,
-      subject: cleanSubject
-        ? `[Concierge] ${cleanSubject} — ${cleanName}`
-        : `[Concierge Inquiry] From ${cleanName}`,
-      textContent: `Name: ${cleanName}\nEmail: ${cleanEmail}\nPhone / WhatsApp: ${cleanPhone || 'Not provided'}\n\nMessage:\n${cleanMessage}`,
-      htmlContent: `
-        <div style="font-family: Arial, sans-serif; max-width: 560px; margin: auto; padding: 24px; border: 1px solid #E8E2D9; background: #FFFFFF; color: #222222;">
-          <h2 style="color: #142B22; margin-top: 0;">New Client Concierge Message</h2>
-          <p><strong>Name:</strong> ${cleanName}</p>
-          <p><strong>Email:</strong> ${cleanEmail}</p>
-          <p><strong>Phone / WhatsApp:</strong> ${cleanPhone || 'Not provided'}</p>
-          <hr style="border: none; border-top: 1px solid #E8E2D9; margin: 16px 0;" />
-          <p style="white-space: pre-line; line-height: 1.6;">${cleanMessage}</p>
+        <div className="footer-bottom">
+          <span>© {new Date().getFullYear()} Single Choice. All rights reserved.</span>
         </div>
-      `,
-    });
+      </footer>
 
-    res.json({ message: 'Thank you for reaching out! Our concierge team has received your message.' });
-  } catch (err) {
-    console.error('Contact email error:', err.message);
-    res.status(500).json({ message: 'Unable to send message right now.' });
-  }
-});
+      {/* QUICK VIEW MODAL */}
+      {selectedBag && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setSelectedBag(null)}
+          role="presentation"
+        >
+          <div
+            className="product-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <button
+              type="button"
+              className="modal-close-circle"
+              onClick={() => setSelectedBag(null)}
+              aria-label="Close product view"
+            >
+              <X size={20} />
+            </button>
 
-// Storefront Settings & Editable Hero Text
-app.get('/api/settings', async (req, res) => {
-  const settings = await Settings.findOne({ key: 'storefront' });
-  res.json(
-    settings || {
-      heroImage: '',
-      heroVideo: '',
-      heroEyebrow: 'SINGLE CHOICE • CAMPAIGN 2026',
-      heroTitle: 'The Art of Carrying',
-      heroSubtitle:
-        'Curated designer silhouettes crafted for timeless presence. Explore every angle, swatch, and limited release.',
-      heroCtaText: 'Discover the Collection',
-    }
+            <div className="product-modal-grid">
+              <div className="product-gallery">
+                <div className="main-gallery-frame">
+                  <img
+                    src={resolveBagImage(
+                      activeBagPresentation.photos[activePhotoIndex] ||
+                        activeBagPresentation.photos[0] ||
+                        selectedBag.image
+                    )}
+                    alt={selectedBag.name}
+                  />
+                  {activeBagPresentation.photos.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        className="gallery-arrow left"
+                        onClick={() =>
+                          setActivePhotoIndex((prev) =>
+                            prev === 0 ? activeBagPresentation.photos.length - 1 : prev - 1
+                          )
+                        }
+                      >
+                        <ChevronLeft size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        className="gallery-arrow right"
+                        onClick={() =>
+                          setActivePhotoIndex((prev) =>
+                            prev === activeBagPresentation.photos.length - 1 ? 0 : prev + 1
+                          )
+                        }
+                      >
+                        <ChevronRight size={18} />
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {activeBagPresentation.photos.length > 1 && (
+                  <div className="thumbnail-strip">
+                    {activeBagPresentation.photos.map((photo, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className={`thumb-btn ${activePhotoIndex === idx ? 'active' : ''}`}
+                        onClick={() => setActivePhotoIndex(idx)}
+                      >
+                        <img src={resolveBagImage(photo)} alt="" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="product-details-pane">
+                <span className="eyebrow-gold">{selectedBag.category}</span>
+                <h2 className="product-modal-title">{selectedBag.name}</h2>
+                <div className="product-modal-price">
+                  ₦{Number(selectedBag.price).toLocaleString()}
+                </div>
+
+                {activeBagPresentation.allColors.length > 0 && (
+                  <div style={{ margin: '12px 0 14px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: 'var(--forest-green)' }}>
+                      Color:{' '}
+                      <span style={{ fontWeight: '400', color: 'var(--text-muted)' }}>
+                        {selectedColor}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {activeBagPresentation.allColors.map((col) => {
+                        const isSelected = selectedColor.toLowerCase() === col.colorName.toLowerCase();
+                        return (
+                          <button
+                            key={col.colorName}
+                            type="button"
+                            onClick={() => {
+                              setSelectedColor(col.colorName);
+                              setActivePhotoIndex(0);
+                              setSelectedQty((q) => Math.min(q, Math.max(1, col.stock)));
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 12px',
+                              border: isSelected
+                                ? '1.5px solid var(--forest-green)'
+                                : '1px solid var(--border-subtle)',
+                              background: isSelected ? 'var(--bg-alabaster)' : '#FFFFFF',
+                              fontSize: '12.5px',
+                              fontWeight: isSelected ? '600' : '400',
+                              color: 'var(--forest-green)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <span
+                              style={{
+                                width: '14px',
+                                height: '14px',
+                                borderRadius: '50%',
+                                backgroundColor: col.colorHex,
+                                border: '1px solid rgba(0,0,0,0.2)',
+                                display: 'inline-block',
+                              }}
+                            />
+                            <span>{col.colorName}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {selectedBag.description && (
+                  <p className="product-modal-desc">{selectedBag.description}</p>
+                )}
+
+                {!isStaff && activeBagPresentation.stock > 0 && (
+                  <div className="qty-selector-block">
+                    <span style={{ fontSize: '13px', fontWeight: '600' }}>Quantity:</span>
+                    <div className="qty-inline-controls">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQty((q) => Math.max(1, q - 1))}
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <span style={{ fontWeight: '700', minWidth: '20px', textAlign: 'center' }}>
+                        {selectedQty}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={selectedQty >= activeBagPresentation.stock}
+                        onClick={() =>
+                          setSelectedQty((q) => Math.min(activeBagPresentation.stock, q + 1))
+                        }
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="stock-status-line">
+                  {activeBagPresentation.stock > 0 ? (
+                    <span style={{ fontSize: '13px', color: 'var(--success)', fontWeight: '500' }}>
+                      ✓ In Stock ({activeBagPresentation.stock} ready for nationwide dispatch)
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '13px', color: 'var(--danger)', fontWeight: '500' }}>
+                      ✕ Sold Out
+                    </span>
+                  )}
+                </div>
+
+                {isStaff ? (
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      background: 'var(--bg-alabaster)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '13px',
+                      color: 'var(--text-muted)',
+                      textAlign: 'center',
+                    }}
+                  >
+                    Staff &amp; admin accounts cannot purchase items.
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary full-width"
+                    disabled={activeBagPresentation.stock <= 0}
+                    onClick={() => handleAddToBag(selectedBag, selectedColor, selectedQty)}
+                  >
+                    {activeBagPresentation.stock > 0
+                      ? `Add to Shopping Bag — ₦${(Number(selectedBag.price) * selectedQty).toLocaleString()}`
+                      : 'Sold Out'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SHOPPING CART / CHECKOUT DRAWER */}
+      {cartOpen && !isStaff && (
+        <div
+          className="drawer-backdrop"
+          style={{ zIndex: 3000 }}
+          onClick={() => {
+            setCartOpen(false);
+            setCheckoutOpen(false);
+          }}
+          role="presentation"
+        >
+          <aside
+            className="cart-drawer"
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Shopping Bag"
+          >
+            <div
+              className="mobile-drawer-header"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 20px',
+                background: 'var(--forest-green)',
+                color: '#fff',
+                width: '100%',
+                margin: 0,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button
+                  type="button"
+                  className="drawer-close-btn"
+                  onClick={() => {
+                    setCartOpen(false);
+                    setCheckoutOpen(false);
+                  }}
+                  style={{
+                    background: 'rgba(255,255,255,0.1)',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    color: '#fff',
+                    width: '36px',
+                    height: '36px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    borderRadius: '4px',
+                  }}
+                  aria-label="Close cart drawer"
+                >
+                  <X size={20} />
+                </button>
+                <div>
+                  <div
+                    className="drawer-eyebrow"
+                    style={{
+                      color: 'var(--champagne-gold)',
+                      fontSize: '10px',
+                      letterSpacing: '0.2em',
+                    }}
+                  >
+                    YOUR SELECTION
+                  </div>
+                  <div
+                    className="drawer-title"
+                    style={{
+                      fontFamily: 'var(--font-serif)',
+                      fontSize: '18px',
+                      color: '#fff',
+                    }}
+                  >
+                    {checkoutOpen ? 'Checkout Details' : `Shopping Bag (${totalCartItems})`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {cart.length === 0 ? (
+              <div
+                className="empty-cart-pane"
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  padding: '32px',
+                  gap: '12px',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <ShoppingBag size={40} strokeWidth={1.2} />
+                <h4>Your Shopping Bag is Empty</h4>
+                <p>Select a luxury piece from our catalog to begin your order.</p>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => setCartOpen(false)}
+                >
+                  Browse Handbags
+                </button>
+              </div>
+            ) : checkoutOpen ? (
+              <form
+                className="checkout-pane"
+                onSubmit={handleInitializeCheckout}
+                style={{
+                  padding: '20px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '14px',
+                  flex: 1,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutOpen(false)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--forest-green)',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      padding: 0,
+                    }}
+                  >
+                    ← Back to Bag Items
+                  </button>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Est. Weight: <strong>{totalCartWeightKg} kg</strong>
+                  </span>
+                </div>
+
+                <h4>Nationwide Nigeria Dispatch Details</h4>
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                  We deliver across all states in Nigeria. Start typing your location below to see
+                  instant suggestions and live courier rates.
+                </p>
+
+                <div className="form-group" style={{ position: 'relative' }}>
+                  <label>Search Location in Nigeria (State, City, Area) *</label>
+                  <input
+                    type="text"
+                    value={locationQuery}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setLocationQuery(val);
+                      setStreetAddress(val);
+                      setCoords({ lat: null, lon: null });
+                    }}
+                    placeholder="Type state, city, or street in Nigeria..."
+                    autoComplete="off"
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      padding: '11px 12px',
+                      fontSize: '14px',
+                      width: '100%',
+                    }}
+                  />
+
+                  {loadingSuggestions && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      Searching locations across Nigeria...
+                    </div>
+                  )}
+
+                  {suggestions.length > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        background: '#FFFFFF',
+                        border: '1px solid var(--border-subtle)',
+                        boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+                        zIndex: 50,
+                        maxHeight: '210px',
+                        overflowY: 'auto',
+                      }}
+                    >
+                      {suggestions.map((sug) => (
+                        <button
+                          key={sug.id}
+                          type="button"
+                          onClick={() => handleSelectSuggestion(sug)}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '10px 12px',
+                            background: '#FFFFFF',
+                            border: 'none',
+                            borderBottom: '1px solid var(--border-subtle)',
+                            fontSize: '13px',
+                            color: 'var(--forest-green)',
+                            cursor: 'pointer',
+                            display: 'block',
+                          }}
+                        >
+                          {sug.formatted}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>State *</label>
+                    <input
+                      type="text"
+                      required
+                      value={deliveryState}
+                      onChange={(e) => {
+                        setDeliveryState(e.target.value);
+                        setCoords({ lat: null, lon: null });
+                      }}
+                      placeholder="e.g. Lagos, Abuja, Rivers"
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-alabaster)',
+                        padding: '10px 12px',
+                        fontSize: '13.5px',
+                        width: '100%',
+                      }}
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>City / Area *</label>
+                    <input
+                      type="text"
+                      required
+                      value={deliveryCity || deliveryArea}
+                      onChange={(e) => {
+                        setDeliveryCity(e.target.value);
+                        setDeliveryArea(e.target.value);
+                        setCoords({ lat: null, lon: null });
+                      }}
+                      placeholder="e.g. Ikeja, Wuse II, GRA"
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-alabaster)',
+                        padding: '10px 12px',
+                        fontSize: '13.5px',
+                        width: '100%',
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Full Street Address *</label>
+                  <input
+                    type="text"
+                    required
+                    value={streetAddress}
+                    onChange={(e) => setStreetAddress(e.target.value)}
+                    placeholder="House/Flat number, Street name, Landmark"
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      padding: '11px 12px',
+                      fontSize: '14px',
+                      width: '100%',
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Recipient Phone / WhatsApp *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={deliveryPhone}
+                    onChange={(e) => setDeliveryPhone(e.target.value)}
+                    placeholder="0803 000 0000"
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-alabaster)',
+                      padding: '11px 12px',
+                      fontSize: '14px',
+                      width: '100%',
+                    }}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    background: 'var(--bg-alabaster)',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12.5px', fontWeight: '700', color: 'var(--forest-green)' }}>
+                    Courier Delivery Options ({totalCartWeightKg} kg total)
+                  </div>
+
+                  {loadingRates ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                      Calculating live courier rates across Nigeria...
+                    </div>
+                  ) : ratesError ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--danger)' }}>{ratesError}</div>
+                  ) : shippingQuotes.length === 0 ? (
+                    <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                      Enter your destination state, city, or street address to calculate delivery fee.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {shippingQuotes.map((quote) => {
+                        const isChosen =
+                          selectedCourier?.id === quote.id ||
+                          selectedCourier?.courierName === quote.courierName;
+                        return (
+                          <button
+                            key={quote.id}
+                            type="button"
+                            onClick={() => setSelectedCourier(quote)}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '10px 12px',
+                              background: isChosen ? '#FFFFFF' : 'transparent',
+                              border: isChosen
+                                ? '1.5px solid var(--forest-green)'
+                                : '1px solid var(--border-subtle)',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              width: '100%',
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--forest-green)' }}>
+                                {quote.courierName}
+                              </div>
+                              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                                {quote.eta}
+                              </div>
+                            </div>
+                            <strong style={{ fontSize: '13.5px', color: 'var(--forest-green)' }}>
+                              ₦{Number(quote.fee).toLocaleString()}
+                            </strong>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    background: 'var(--bg-alabaster)',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    fontSize: '13.5px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Handbags Subtotal</span>
+                    <strong>₦{cartSubtotal.toLocaleString()}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      Delivery Fee {selectedCourier ? `(${selectedCourier.courierName})` : ''}
+                    </span>
+                    <strong>₦{selectedDeliveryFee.toLocaleString()}</strong>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      paddingTop: '8px',
+                      borderTop: '1px solid var(--border-subtle)',
+                      fontSize: '15px',
+                    }}
+                  >
+                    <strong>Total Billing</strong>
+                    <strong>₦{grandTotal.toLocaleString()}</strong>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="btn-primary full-width"
+                  disabled={checkingOut || loadingRates}
+                >
+                  {checkingOut
+                    ? 'Redirecting to Paystack...'
+                    : `Proceed to Paystack — ₦${grandTotal.toLocaleString()}`}
+                </button>
+              </form>
+            ) : (
+              <>
+                <div
+                  style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    padding: '18px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px',
+                  }}
+                >
+                  {cart.map((item) => {
+                    const maxAvailable = getCartItemStock(item.bag, item.selectedColor);
+                    const atMaxStock = maxAvailable > 0 && item.qty >= maxAvailable;
+
+                    return (
+                      <div
+                        key={`${item.bag._id}-${item.selectedColor}`}
+                        style={{
+                          display: 'flex',
+                          gap: '12px',
+                          padding: '12px',
+                          border: '1px solid var(--border-subtle)',
+                          background: 'var(--bg-alabaster)',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <img
+                          src={resolveBagImage(item.bag.image || item.bag.images?.[0])}
+                          alt={item.bag.name}
+                          style={{ width: '68px', height: '76px', objectFit: 'cover' }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <h5
+                            style={{
+                              fontFamily: 'var(--font-serif)',
+                              fontSize: '15px',
+                              color: 'var(--forest-green)',
+                            }}
+                          >
+                            {item.bag.name}
+                          </h5>
+                          <span
+                            style={{
+                              display: 'block',
+                              fontSize: '12px',
+                              color: 'var(--text-muted)',
+                              margin: '2px 0 4px',
+                            }}
+                          >
+                            Color: {item.selectedColor || 'Classic'}
+                            {maxAvailable > 0 ? ` • ${maxAvailable} in stock` : ' • Sold out'}
+                          </span>
+                          <div style={{ fontWeight: '700', fontSize: '13.5px' }}>
+                            ₦{(item.bag.price * item.qty).toLocaleString()}
+                          </div>
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              marginTop: '6px',
+                              background: '#fff',
+                              border: '1px solid var(--border-subtle)',
+                              padding: '2px 8px',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                item.qty > 1
+                                  ? handleAddToBag(item.bag, item.selectedColor, -1)
+                                  : handleRemoveFromCart(item.bag._id, item.selectedColor)
+                              }
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <Minus size={13} />
+                            </button>
+                            <span style={{ fontSize: '13px', fontWeight: '600' }}>{item.qty}</span>
+                            <button
+                              type="button"
+                              disabled={atMaxStock || maxAvailable <= 0}
+                              onClick={() => handleAddToBag(item.bag, item.selectedColor, 1)}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                cursor: atMaxStock || maxAvailable <= 0 ? 'not-allowed' : 'pointer',
+                                opacity: atMaxStock || maxAvailable <= 0 ? 0.4 : 1,
+                              }}
+                            >
+                              <Plus size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFromCart(item.bag._id, item.selectedColor)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div
+                  style={{
+                    padding: '18px',
+                    borderTop: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-alabaster)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px' }}>
+                    <span>Subtotal</span>
+                    <strong>₦{cartSubtotal.toLocaleString()}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary full-width"
+                    onClick={() => setCheckoutOpen(true)}
+                  >
+                    PROCEED TO CHECKOUT
+                  </button>
+                </div>
+              </>
+            )}
+          </aside>
+        </div>
+      )}
+
+      {/* AUTH MODAL */}
+      {authModalOpen && (
+        <AuthModal
+          initialMode={authInitialMode}
+          onClose={() => setAuthModalOpen(false)}
+          onSuccess={handleAuthSuccess}
+          showToast={showToast}
+        />
+      )}
+
+      {/* TOAST BANNER */}
+      {toast && (
+        <div className={`toast-banner ${toast.type === 'error' ? 'error' : 'success'}`}>
+          {toast.message}
+        </div>
+      )}
+    </div>
   );
-});
-
-app.put('/api/admin/settings/text', protect, adminOnly, async (req, res) => {
-  try {
-    const { heroEyebrow, heroTitle, heroSubtitle, heroCtaText } = req.body;
-    const updated = await Settings.findOneAndUpdate(
-      { key: 'storefront' },
-      {
-        ...(heroEyebrow !== undefined && { heroEyebrow }),
-        ...(heroTitle !== undefined && { heroTitle }),
-        ...(heroSubtitle !== undefined && { heroSubtitle }),
-        ...(heroCtaText !== undefined && { heroCtaText }),
-      },
-      { new: true, upsert: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/admin/settings/hero', protect, adminOnly, upload.single('heroFile'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ message: 'Please select a banner photo.' });
-    const existing = await Settings.findOne({ key: 'storefront' });
-    const oldPublicId = extractCloudinaryPublicId(existing?.heroImage);
-    if (oldPublicId) await cloudinary.uploader.destroy(oldPublicId).catch(() => {});
-
-    const updated = await Settings.findOneAndUpdate(
-      { key: 'storefront' },
-      { heroImage: req.file.path },
-      { new: true, upsert: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post(
-  '/api/admin/settings/video',
-  protect,
-  adminOnly,
-  uploadVideo.single('heroVideoFile'),
-  async (req, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ message: 'Please select a campaign video.' });
-      const existing = await Settings.findOne({ key: 'storefront' });
-      const oldPublicId = extractCloudinaryPublicId(existing?.heroVideo);
-      if (oldPublicId) {
-        await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
-      }
-
-      const updated = await Settings.findOneAndUpdate(
-        { key: 'storefront' },
-        { heroVideo: req.file.path },
-        { new: true, upsert: true }
-      );
-      res.json(updated);
-    } catch (err) {
-      res.status(500).json({ message: err.message });
-    }
-  }
-);
-
-app.delete('/api/admin/settings/video', protect, adminOnly, async (req, res) => {
-  try {
-    const existing = await Settings.findOne({ key: 'storefront' });
-    const oldPublicId = extractCloudinaryPublicId(existing?.heroVideo);
-    if (oldPublicId) {
-      await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'video' }).catch(() => {});
-    }
-
-    const updated = await Settings.findOneAndUpdate(
-      { key: 'storefront' },
-      { heroVideo: '' },
-      { new: true, upsert: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// Auth Routes (with 6-digit OTP & Password Reset)
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-    const normalizedEmail = email.toLowerCase().trim();
-    const existing = await User.findOne({ email: normalizedEmail });
-
-    if (existing && existing.isVerified) {
-      return res.status(400).json({ message: 'An account with this email already exists.' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-
-    if (existing && !existing.isVerified) {
-      existing.name = name.trim();
-      existing.password = hashedPassword;
-      existing.otpCode = otp;
-      existing.otpExpires = otpExpires;
-      await existing.save();
-    } else {
-      await User.create({
-        name: name.trim(),
-        email: normalizedEmail,
-        password: hashedPassword,
-        role: 'customer',
-        isVerified: false,
-        otpCode: otp,
-        otpExpires,
-      });
-    }
-
-    sendCustomerOtpEmail(normalizedEmail, name.trim(), otp).catch((e) =>
-      console.error('OTP email error:', e.message)
-    );
-    res.status(201).json({ requiresOtp: true, email: normalizedEmail, message: 'Verification code sent.' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/auth/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-    const user = await User.findOne({ email: email.toLowerCase().trim(), role: 'customer' });
-    if (!user) return res.status(404).json({ message: 'Account not found.' });
-
-    if (user.isVerified) {
-      return res.json({
-        token: signToken(user),
-        user: { id: user._id, name: user.name, email: user.email, role: user.role },
-      });
-    }
-
-    if (!user.otpCode || user.otpCode !== otp.trim()) {
-      return res.status(400).json({ message: 'Invalid verification code.' });
-    }
-
-    if (user.otpExpires && new Date() > user.otpExpires) {
-      return res.status(400).json({ message: 'Verification code has expired.' });
-    }
-
-    user.isVerified = true;
-    user.otpCode = null;
-    user.otpExpires = null;
-    await user.save();
-
-    res.json({
-      token: signToken(user),
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(400).json({ message: 'Invalid email or password.' });
-    }
-    res.json({
-      token: signToken(user),
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.get('/api/auth/me', protect, async (req, res) => {
-  res.json({
-    user: {
-      id: req.user._id,
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-    },
-  });
-});
-
-app.post('/api/auth/forgot-password', async (req, res) => {
-  try {
-    const { email } = req.body;
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalizedEmail });
-    if (!user) return res.status(404).json({ message: 'No account found with this email.' });
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otpCode = otp;
-    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-    await user.save();
-
-    setImmediate(() => {
-      sendBrevoEmail({
-        toEmail: normalizedEmail,
-        toName: user.name,
-        subject: `${otp} is your Single Choice password reset code`,
-        textContent: `Your password reset code is: ${otp}. Valid for 10 minutes.`,
-      }).catch((err) => console.error('Password reset email error:', err.message));
-    });
-
-    res.json({ email: normalizedEmail, message: '6-digit password reset code sent to your email.' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/auth/reset-password', async (req, res) => {
-  try {
-    const { email, otp, newPassword } = req.body;
-    if (!email || !otp || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({ message: 'Please provide valid code and password (min 6 chars).' });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!user || !user.otpCode || user.otpCode !== otp.trim()) {
-      return res.status(400).json({ message: 'Invalid or incorrect 6-digit code.' });
-    }
-
-    if (user.otpExpires && new Date() > user.otpExpires) {
-      return res.status(400).json({ message: 'Reset code has expired.' });
-    }
-
-    user.password = await bcrypt.hash(newPassword, 10);
-    user.otpCode = null;
-    user.otpExpires = null;
-    user.isVerified = true;
-    await user.save();
-
-    res.json({
-      token: signToken(user),
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
-      message: 'Password updated successfully.',
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.get('/api/collections', async (req, res) => {
-  const collections = await Collection.find().sort({ createdAt: 1 });
-  res.json(collections);
-});
-
-app.post('/api/collections', protect, adminOnly, async (req, res) => {
-  try {
-    const { name } = req.body;
-    const collection = await Collection.create({ name: name.trim() });
-    res.status(201).json(collection);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.delete('/api/collections/:id', protect, adminOnly, async (req, res) => {
-  await Collection.findByIdAndDelete(req.params.id);
-  res.json({ message: 'Collection removed.' });
-});
-
-app.get('/api/bags', async (req, res) => {
-  const bags = await Bag.find().sort({ createdAt: -1 });
-  res.json(bags);
-});
-
-app.post('/api/bags', protect, staffOnly, upload.any(), async (req, res) => {
-  try {
-    const { name, category, price, stock, description, colorName, colorHex, variantsJson } = req.body;
-    const primaryFiles = (req.files || []).filter((f) => f.fieldname === 'imageFiles');
-    if (primaryFiles.length === 0) {
-      return res.status(400).json({ message: 'Please select at least 1 photo.' });
-    }
-
-    let variants = [];
-    if (variantsJson) {
-      const parsed = JSON.parse(variantsJson);
-      if (Array.isArray(parsed)) {
-        variants = parsed
-          .filter((v) => v && (v.colorName || '').trim())
-          .map((v, idx) => {
-            const vFiles = (req.files || []).filter((f) => f.fieldname === `variantFiles_${idx}`);
-            const vUrls =
-              vFiles.length > 0
-                ? vFiles.map((f) => f.path)
-                : Array.isArray(v.images)
-                ? v.images
-                : v.image
-                ? [v.image]
-                : [];
-            return {
-              colorName: v.colorName.trim(),
-              colorHex: v.colorHex || '#142B22',
-              stock: Number(v.stock ?? 1),
-              image: vUrls[0] || '',
-              images: vUrls,
-            };
-          });
-      }
-    }
-
-    const primaryImageUrls = primaryFiles.map((f) => f.path);
-    const numStock = Number(stock ?? 1);
-    const totalRemaining =
-      numStock + variants.reduce((sum, v) => sum + (v.stock ?? 0), 0);
-
-    const bag = await Bag.create({
-      name: (name || '').trim(),
-      category: (category || '').trim(),
-      price: Number(price),
-      stock: numStock,
-      description: description || '',
-      colorName: (colorName || 'Classic').trim(),
-      colorHex: colorHex || '#142B22',
-      image: primaryImageUrls[0],
-      images: primaryImageUrls,
-      variants,
-      inStock: totalRemaining > 0,
-    });
-    res.status(201).json(bag);
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
-
-app.put('/api/bags/:id', protect, staffOnly, upload.any(), async (req, res) => {
-  try {
-    const bag = await Bag.findById(req.params.id);
-    if (!bag) {
-      return res.status(404).json({ message: 'Handbag not found.' });
-    }
-
-    const { name, category, price, stock, description, colorName, colorHex, variantsJson } = req.body;
-
-    if (name !== undefined && String(name).trim()) {
-      bag.name = String(name).trim();
-    }
-    if (category !== undefined && String(category).trim()) {
-      bag.category = String(category).trim();
-    }
-    if (price !== undefined && price !== '') {
-      bag.price = Number(price);
-    }
-    if (stock !== undefined && stock !== '') {
-      bag.stock = Number(stock);
-    }
-    if (description !== undefined) {
-      bag.description = description;
-    }
-    if (colorName !== undefined && String(colorName).trim()) {
-      bag.colorName = String(colorName).trim();
-    }
-    if (colorHex !== undefined && String(colorHex).trim()) {
-      bag.colorHex = String(colorHex).trim();
-    }
-
-    const primaryFiles = (req.files || []).filter((f) => f.fieldname === 'imageFiles');
-    if (primaryFiles.length > 0) {
-      const uploadedUrls = primaryFiles.map((f) => f.path);
-      bag.image = uploadedUrls[0];
-      bag.images = uploadedUrls;
-    }
-
-    if (variantsJson !== undefined) {
-      const parsedVariants = JSON.parse(variantsJson);
-      if (Array.isArray(parsedVariants)) {
-        bag.variants = parsedVariants
-          .filter((v) => v && (v.colorName || '').trim())
-          .map((v, idx) => {
-            const vFiles = (req.files || []).filter((f) => f.fieldname === `variantFiles_${idx}`);
-            const vUrls =
-              vFiles.length > 0
-                ? vFiles.map((f) => f.path)
-                : Array.isArray(v.images)
-                ? v.images
-                : v.image
-                ? [v.image]
-                : [];
-            return {
-              colorName: v.colorName.trim(),
-              colorHex: v.colorHex || '#142B22',
-              stock: Number(v.stock ?? 1),
-              image: vUrls[0] || '',
-              images: vUrls,
-            };
-          });
-      }
-    }
-
-    const totalRemaining =
-      (bag.stock ?? 0) +
-      (bag.variants || []).reduce((sum, v) => sum + (v.stock ?? 0), 0);
-    bag.inStock = totalRemaining > 0;
-
-    await bag.save();
-    res.json(bag);
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
-
-app.delete('/api/bags/:id', protect, adminOnly, async (req, res) => {
-  await Bag.findByIdAndDelete(req.params.id);
-  res.json({ message: 'Bag deleted.' });
-});
-
-app.get('/api/cart', protect, customerOnly, async (req, res) => {
-  const user = await User.findById(req.user._id).populate('cart.bag');
-  res.json(user.cart.filter((item) => item.bag !== null));
-});
-
-app.post('/api/cart', protect, customerOnly, async (req, res) => {
-  const { bagId, qty = 1, selectedColor } = req.body;
-  const bag = await Bag.findById(bagId);
-  if (!bag) return res.status(404).json({ message: 'Bag not found.' });
-
-  const user = await User.findById(req.user._id);
-  const colorToUse = selectedColor || bag.colorName || 'Classic';
-  const existing = user.cart.find(
-    (item) => item.bag.toString() === bagId && item.selectedColor === colorToUse
-  );
-
-  if (existing) {
-    existing.qty += Number(qty);
-  } else {
-    user.cart.push({ bag: bagId, qty: Number(qty), selectedColor: colorToUse });
-  }
-
-  await user.save();
-  const updated = await User.findById(req.user._id).populate('cart.bag');
-  res.json(updated.cart.filter((item) => item.bag !== null));
-});
-
-app.delete('/api/cart/:bagId', protect, customerOnly, async (req, res) => {
-  const { color } = req.query;
-  const user = await User.findById(req.user._id);
-  user.cart = user.cart.filter(
-    (item) => !(item.bag.toString() === req.params.bagId && (!color || item.selectedColor === color))
-  );
-  await user.save();
-  const updated = await User.findById(req.user._id).populate('cart.bag');
-  res.json(updated.cart.filter((item) => item.bag !== null));
-});
-
-// Live Nationwide Sendbox Courier Rate Shopping
-app.post('/api/shipping/rates', protect, customerOnly, async (req, res) => {
-  try {
-    const { destinationAddress, state, city, area, weightKg, lat, lon } = req.body;
-    if (!String(destinationAddress || area || city || state || '').trim()) {
-      return res.status(400).json({ message: 'Please enter a destination location in Nigeria.' });
-    }
-
-    const user = await User.findById(req.user._id).populate('cart.bag');
-    const validItems = (user?.cart || []).filter((i) => i.bag !== null);
-    const totalItemQty = validItems.reduce((sum, i) => sum + Number(i.qty || 1), 0);
-    const calculatedWeightKg =
-      Number(weightKg) > 0
-        ? Number(weightKg)
-        : Math.max(DEFAULT_BAG_WEIGHT_KG, totalItemQty * DEFAULT_BAG_WEIGHT_KG);
-
-    const result = await fetchSendboxQuotes({
-      destinationAddress,
-      state,
-      city,
-      area,
-      weightKg: calculatedWeightKg,
-      lat,
-      lon,
-    });
-
-    res.json({
-      pickup: PICKUP_CONFIG,
-      weightKg: calculatedWeightKg,
-      source: result.source,
-      quotes: result.quotes,
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message || 'Unable to fetch shipping quotes.' });
-  }
-});
-
-app.post('/api/checkout/initialize', protect, customerOnly, async (req, res) => {
-  try {
-    const {
-      area,
-      city,
-      state,
-      streetAddress,
-      phone,
-      selectedCourier,
-      lat,
-      lon,
-    } = req.body;
-
-    const user = await User.findById(req.user._id).populate('cart.bag');
-    const validItems = user.cart.filter((i) => i.bag !== null);
-    if (validItems.length === 0) return res.status(400).json({ message: 'Cart is empty.' });
-
-    const totalItemQty = validItems.reduce((sum, i) => sum + Number(i.qty || 1), 0);
-    const weightKg = Math.max(DEFAULT_BAG_WEIGHT_KG, totalItemQty * DEFAULT_BAG_WEIGHT_KG);
-
-    const quoteResult = await fetchSendboxQuotes({
-      destinationAddress: streetAddress,
-      state: state || area,
-      city: city || area,
-      area: area || city || state || 'Nigeria',
-      weightKg,
-      lat,
-      lon,
-    });
-
-    const quotes = quoteResult.quotes;
-    const matchedQuote =
-      quotes.find(
-        (q) =>
-          (selectedCourier?.id && q.id === selectedCourier.id) ||
-          (selectedCourier?.courierName &&
-            q.courierName.toLowerCase() === String(selectedCourier.courierName).toLowerCase())
-      ) || quotes[0];
-
-    const subtotal = validItems.reduce((sum, i) => sum + i.bag.price * i.qty, 0);
-    const deliveryFee = matchedQuote ? Number(matchedQuote.fee) : 0;
-    const courierName = matchedQuote?.courierName || selectedCourier?.courierName || 'Standard Dispatch';
-    const courierEta = matchedQuote?.eta || selectedCourier?.eta || '';
-    const totalAmount = subtotal + deliveryFee;
-    const reference = 'SC_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-
-    const formattedArea = [area, city, state].filter(Boolean).join(', ') || 'Nigeria';
-
-    const createdOrder = await Order.create({
-      customer: user._id,
-      items: validItems.map((i) => {
-        const chosenColor = i.selectedColor || i.bag.colorName || 'Classic';
-        const matchedVariant = (i.bag.variants || []).find(
-          (v) => (v.colorName || '').toLowerCase() === chosenColor.toLowerCase()
-        );
-        const itemImage =
-          matchedVariant?.image ||
-          matchedVariant?.images?.[0] ||
-          i.bag.image ||
-          i.bag.images?.[0] ||
-          '';
-
-        return {
-          bagId: i.bag._id,
-          bagName: i.bag.name,
-          selectedColor: chosenColor,
-          name: `${i.bag.name} (${chosenColor})`,
-          price: i.bag.price,
-          qty: i.qty,
-          image: itemImage,
-        };
-      }),
-      delivery: {
-        city: (city || state || 'Lagos').trim(),
-        area: formattedArea,
-        streetAddress,
-        phone,
-        fee: deliveryFee,
-        courierName,
-        eta: courierEta,
-        weightKg,
-      },
-      subtotal,
-      deliveryFee,
-      totalAmount,
-      paystackReference: reference,
-    });
-
-    await sendOrderEmails(createdOrder, user, 'placed');
-
-    if (!process.env.PAYSTACK_SECRET_KEY) {
-      return res.json({
-        authorization_url: '#',
-        reference,
-        subtotal,
-        deliveryFee,
-        courierName,
-        totalAmount,
-      });
-    }
-
-    const rawClientUrl = (process.env.CLIENT_URL || '').trim().replace(/\/+$/, '');
-    const clientBase =
-      rawClientUrl && !rawClientUrl.includes('choice-store.vercel.app')
-        ? rawClientUrl
-        : 'https://www.singlechoice.ng';
-
-    const paystackRes = await axios.post(
-      'https://api.paystack.co/transaction/initialize',
-      {
-        email: user.email,
-        amount: Math.round(totalAmount * 100),
-        reference,
-        callback_url: `${clientBase}/?reference=${encodeURIComponent(reference)}`,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const authorizationUrl = paystackRes.data?.data?.authorization_url || '#';
-    res.json({
-      authorization_url: authorizationUrl,
-      reference,
-      subtotal,
-      deliveryFee,
-      courierName,
-      totalAmount,
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.response?.data?.message || err.message });
-  }
-});
-
-app.get('/api/checkout/verify/:reference', protect, customerOnly, async (req, res) => {
-  try {
-    const reference = req.params.reference;
-    const existingOrder = await Order.findOne({ paystackReference: reference });
-    if (!existingOrder) {
-      return res.status(404).json({ message: 'Order not found for reference.' });
-    }
-
-    if (process.env.PAYSTACK_SECRET_KEY) {
-      const verifyRes = await axios.get(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          },
-        }
-      );
-      const txStatus = verifyRes.data?.data?.status;
-      if (txStatus !== 'success') {
-        return res.status(400).json({ status: txStatus || 'pending', message: 'Payment not completed yet.' });
-      }
-    }
-
-    await fulfillPaidOrder(reference);
-    res.json({ status: 'paid', message: 'Order confirmed successfully.' });
-  } catch (err) {
-    res.status(500).json({ message: err.response?.data?.message || err.message });
-  }
-});
-
-app.get('/api/orders/my', protect, async (req, res) => {
-  const orders = await Order.find({ customer: req.user._id }).sort({ createdAt: -1 });
-  res.json(orders);
-});
-
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(async () => {
-    console.log('Connected to MongoDB');
-    await seedInitialData();
-    const PORT = process.env.PORT || 5000;
-    app.listen(PORT, () => console.log(`API running on port ${PORT}`));
-  })
-  .catch((err) => console.error('DB error:', err.message));
+}
