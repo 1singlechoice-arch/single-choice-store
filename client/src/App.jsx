@@ -1111,15 +1111,15 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={{ overflowX: 'clip', width: '100%' }}>
       {/* Top Announcement Bar */}
       <div className="announcement-bar">
         <span>NATIONWIDE NIGERIA DISPATCH • AUTHENTIC DESIGNER HANDBAGS</span>
       </div>
 
       {/* Main Header */}
-      <header className="site-header">
-        <div className="header-inner">
+      <header className="site-header" style={{ width: '100%' }}>
+        <div className="header-inner" style={{ width: '100%', maxWidth: '1360px', margin: '0 auto' }}>
           <div className="header-left">
             <button
               type="button"
@@ -1196,7 +1196,7 @@ export default function App() {
 
           <div className="header-right">
             {user ? (
-              <div className="user-chip-group">
+              <div className="user-chip-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
                 <span className="user-greeting">Hi, {user.name?.split(' ')[0] || 'Client'}</span>
                 <button type="button" className="btn-ghost-sm" onClick={handleLogout}>
                   Sign Out
@@ -1234,6 +1234,7 @@ export default function App() {
               <video
                 ref={heroVideoRef}
                 className="hero-media"
+                style={{ objectPosition: '50% 22%' }}
                 src={resolveBagImage(heroVideo)}
                 poster={heroImage ? resolveBagImage(heroImage) : undefined}
                 autoPlay
@@ -1244,6 +1245,7 @@ export default function App() {
             ) : (
               <img
                 className="hero-media"
+                style={{ objectPosition: '50% 22%' }}
                 src={resolveBagImage(heroImage)}
                 alt={heroTitle}
               />
@@ -1572,7 +1574,12 @@ export default function App() {
           </div>
 
           {orders.length === 0 ? (
-            <div className="empty-state-card">No orders placed yet.</div>
+            <div className="empty-state-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+              <span>No orders placed yet.</span>
+              <button type="button" className="btn-primary-sm" onClick={() => setView('shop')}>
+                Explore Handbags
+              </button>
+            </div>
           ) : (
             <div className="orders-list">
               {orders.map((order) => (
