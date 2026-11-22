@@ -45,6 +45,17 @@ const WHATSAPP_LINK = `https://wa.me/${WHATSAPP_INTERNATIONAL_NUMBER}?text=${enc
   'Hello Single Choice Concierge, I would like to inquire about a handbag.'
 )}`;
 
+const matchNigeriaState = (rawState = '') => {
+  const normalized = String(rawState || '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes('abuja') || normalized.includes('fct')) return 'FCT - Abuja';
+  return (
+    NIGERIA_STATES.find(
+      (st) => st.toLowerCase() === normalized || normalized.includes(st.toLowerCase())
+    ) || null
+  );
+};
+
 const getBagPrimaryColor = (bag) => (bag?.colorName || 'Classic').trim();
 
 const getBagColorOptions = (bag) => {
@@ -411,8 +422,10 @@ export default function App() {
   const [phone, setPhone] = useState('');
   const [addressSuggestions, setAddressSuggestions] = useState([]);
   const [loadingAddressSuggestions, setLoadingAddressSuggestions] = useState(false);
+  const [addressHint, setAddressHint] = useState('');
   const [selectedCoords, setSelectedCoords] = useState(null);
   const [shippingQuotes, setShippingQuotes] = useState([]);
+  const [rateSource, setRateSource] = useState('');
   const [selectedQuoteId, setSelectedQuoteId] = useState('');
   const [loadingRates, setLoadingRates] = useState(false);
   const [rateError, setRateError] = useState('');
@@ -850,61 +863,93 @@ export default function App() {
 
   const activeDeliveryFee = selectedQuote ? Number(selectedQuote.fee || 0) : 0;
 
+  // Geoapify Address Autocomplete (#delivery location lookup)
   useEffect(() => {
     if (!checkoutOpen) return;
-    const queryText = [streetAddress, deliveryArea, deliveryCity, deliveryState]
-      .map((s) => (s || '').trim())
-      .filter(Boolean)
-      .join(', ');
-
-    if (queryText.length < 4) {
+    const rawStreet = streetAddress.trim();
+    if (rawStreet.length < 3) {
       setAddressSuggestions([]);
+      setAddressHint('');
       return;
     }
 
     const apiKey = (import.meta.env.VITE_GEOAPIFY_API_KEY || '').trim();
-    if (!apiKey) return;
+    if (!apiKey) {
+      setAddressSuggestions([]);
+      setAddressHint('Address autocomplete requires VITE_GEOAPIFY_API_KEY in frontend .env.');
+      return;
+    }
 
+    const queryText = [rawStreet, deliveryArea, deliveryCity, deliveryState, 'Nigeria']
+      .map((s) => (s || '').trim())
+      .filter(Boolean)
+      .join(', ');
+
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setLoadingAddressSuggestions(true);
+      setAddressHint('');
       try {
         const res = await fetch(
           `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(
             queryText
           )}&filter=countrycode:ng&limit=5&apiKey=${encodeURIComponent(apiKey)}`
         );
+        if (!res.ok) {
+          throw new Error(`Geoapify lookup failed (${res.status})`);
+        }
         const data = await res.json();
-        const features = Array.isArray(data?.features) ? data.features : [];
-        setAddressSuggestions(
-          features.map((f, idx) => ({
-            id: f.properties?.place_id || `${idx}`,
-            label: f.properties?.formatted || '',
-            city: f.properties?.city || f.properties?.town || f.properties?.suburb || '',
-            state: f.properties?.state || '',
-            lat: f.properties?.lat,
-            lon: f.properties?.lon,
-          }))
-        );
-      } catch {
-        setAddressSuggestions([]);
-      } finally {
-        setLoadingAddressSuggestions(false);
-      }
-    }, 350);
+        if (cancelled) return;
 
-    return () => clearTimeout(timer);
+        const features = Array.isArray(data?.features) ? data.features : [];
+        const mapped = features.map((f, idx) => ({
+          id: f.properties?.place_id || `${idx}`,
+          label: f.properties?.formatted || '',
+          city: f.properties?.city || f.properties?.town || f.properties?.suburb || f.properties?.district || '',
+          suburb: f.properties?.suburb || f.properties?.neighbourhood || f.properties?.district || '',
+          state: f.properties?.state || '',
+          lat: f.properties?.lat,
+          lon: f.properties?.lon,
+        }));
+        setAddressSuggestions(mapped);
+        if (mapped.length === 0) {
+          setAddressHint('No matching Nigeria addresses found yet—keep typing or select your state/city.');
+        }
+      } catch {
+        if (!cancelled) {
+          setAddressSuggestions([]);
+          setAddressHint('Could not load address suggestions right now.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingAddressSuggestions(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [checkoutOpen, streetAddress, deliveryArea, deliveryCity, deliveryState]);
 
   const handleSelectSuggestion = (s) => {
     setStreetAddress(s.label || streetAddress);
     if (s.city) {
       setDeliveryCity(s.city);
-      if (!deliveryArea) setDeliveryArea(s.city);
+    }
+    if (s.suburb || s.city) {
+      setDeliveryArea(s.suburb || s.city);
+    }
+    const matchedSt = matchNigeriaState(s.state);
+    if (matchedSt) {
+      setDeliveryState(matchedSt);
     }
     if (typeof s.lat === 'number' && typeof s.lon === 'number') {
       setSelectedCoords({ lat: s.lat, lon: s.lon });
     }
     setAddressSuggestions([]);
+    setAddressHint('');
   };
 
   const fetchShippingQuotes = useCallback(async () => {
@@ -937,6 +982,7 @@ export default function App() {
       );
       const quotes = Array.isArray(res?.quotes) ? res.quotes : [];
       setShippingQuotes(quotes);
+      setRateSource(res?.source || '');
       if (quotes.length > 0) {
         setSelectedQuoteId((prev) =>
           quotes.some((q) => q.id === prev) ? prev : quotes[0].id
@@ -962,7 +1008,7 @@ export default function App() {
     }, 450);
 
     return () => clearTimeout(timer);
-  }, [checkoutOpen, streetAddress, deliveryArea, deliveryCity, deliveryState, fetchShippingQuotes]);
+  }, [checkoutOpen, streetAddress, deliveryArea, deliveryCity, deliveryState, selectedCoords, fetchShippingQuotes]);
 
   const handleOpenCheckout = () => {
     if (!token || !user) {
@@ -1916,7 +1962,10 @@ export default function App() {
                   <label>State *</label>
                   <select
                     value={deliveryState}
-                    onChange={(e) => setDeliveryState(e.target.value)}
+                    onChange={(e) => {
+                      setDeliveryState(e.target.value);
+                      setSelectedCoords(null);
+                    }}
                   >
                     {NIGERIA_STATES.map((st) => (
                       <option key={st} value={st}>
@@ -1931,7 +1980,10 @@ export default function App() {
                   <input
                     type="text"
                     value={deliveryCity}
-                    onChange={(e) => setDeliveryCity(e.target.value)}
+                    onChange={(e) => {
+                      setDeliveryCity(e.target.value);
+                      setSelectedCoords(null);
+                    }}
                     placeholder="e.g. Ikeja, Lekki"
                   />
                 </div>
@@ -1947,10 +1999,19 @@ export default function App() {
                     setStreetAddress(e.target.value);
                     setSelectedCoords(null);
                   }}
-                  placeholder="House number and street name"
+                  placeholder="Type street or area (e.g. Admiralty Way, Lekki)"
+                  autoComplete="off"
                 />
                 {loadingAddressSuggestions && (
-                  <small className="helper-hint">Finding matching addresses...</small>
+                  <small className="helper-hint">Finding matching Nigeria locations...</small>
+                )}
+                {addressHint && !loadingAddressSuggestions && (
+                  <small className="helper-hint">{addressHint}</small>
+                )}
+                {selectedCoords && (
+                  <small className="helper-hint">
+                    Location pinned ({selectedCoords.lat.toFixed(4)}, {selectedCoords.lon.toFixed(4)})
+                  </small>
                 )}
                 {addressSuggestions.length > 0 && (
                   <div className="address-suggestions">
@@ -1994,7 +2055,14 @@ export default function App() {
 
               <div className="form-group">
                 <div className="courier-header-row">
-                  <label>Courier Dispatch Option</label>
+                  <label>
+                    Courier Dispatch Option
+                    {rateSource === 'sendbox_live'
+                      ? ' • Live Sendbox Rates'
+                      : rateSource === 'estimated_fallback'
+                      ? ' • Estimated Rates'
+                      : ''}
+                  </label>
                   <button
                     type="button"
                     className="btn-ghost-sm"
