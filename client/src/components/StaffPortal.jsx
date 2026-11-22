@@ -281,10 +281,11 @@ export default function StaffPortal({
 
   const slotInputRefs = useRef({});
 
-  // Orders & Fulfillment State (#4)
+  // Orders & Fulfillment State (#7)
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [orderFilter, setOrderFilter] = useState('all');
+  const [orderSearch, setOrderSearch] = useState('');
   const [orderDrafts, setOrderDrafts] = useState({});
   const [savingOrderId, setSavingOrderId] = useState('');
 
@@ -903,11 +904,30 @@ export default function StaffPortal({
   };
 
   const filteredOrders = orders.filter((ord) => {
-    if (orderFilter === 'all') return true;
-    if (orderFilter === 'paid' || orderFilter === 'pending') {
-      return ord.paymentStatus === orderFilter;
-    }
-    return (ord.fulfillmentStatus || 'processing') === orderFilter;
+    const matchesFilter =
+      orderFilter === 'all' ||
+      (orderFilter === 'paid' || orderFilter === 'pending'
+        ? ord.paymentStatus === orderFilter
+        : (ord.fulfillmentStatus || 'processing') === orderFilter);
+
+    if (!matchesFilter) return false;
+
+    const q = orderSearch.trim().toLowerCase();
+    if (!q) return true;
+
+    const shortId = String(ord._id || '').slice(-6).toLowerCase();
+    const fullId = String(ord._id || '').toLowerCase();
+    const customerName = String(ord.customer?.name || '').toLowerCase();
+    const customerEmail = String(ord.customer?.email || '').toLowerCase();
+    const tracking = String(ord.trackingNumber || '').toLowerCase();
+
+    return (
+      shortId.includes(q) ||
+      fullId.includes(q) ||
+      customerName.includes(q) ||
+      customerEmail.includes(q) ||
+      tracking.includes(q)
+    );
   });
 
   return (
@@ -1272,15 +1292,35 @@ export default function StaffPortal({
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={loadOrders}
-              disabled={loadingOrders}
-              style={{ padding: '8px 14px', fontSize: '12.5px' }}
-            >
-              {loadingOrders ? 'Refreshing...' : 'Refresh Orders'}
-            </button>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={orderSearch}
+                onChange={(e) => setOrderSearch(e.target.value)}
+                placeholder="Search order #, customer, tracking..."
+                style={{
+                  padding: '8px 12px',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-card)',
+                  fontSize: '12.5px',
+                  minWidth: '210px',
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={loadOrders}
+                disabled={loadingOrders}
+                style={{ padding: '8px 14px', fontSize: '12.5px' }}
+              >
+                {loadingOrders ? 'Refreshing...' : 'Refresh Orders'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Setting status to <strong>Dispatched</strong> or <strong>Delivered</strong> automatically emails the customer with their tracking / waybill details.
           </div>
 
           {loadingOrders ? (
@@ -1332,6 +1372,7 @@ export default function StaffPortal({
                       <br />
                       <strong>Address:</strong> {ord.delivery?.streetAddress}, {ord.delivery?.area}
                       {ord.delivery?.courierName ? ` • Courier: ${ord.delivery.courierName}` : ''}
+                      {ord.trackingNumber ? ` • Current Tracking: ${ord.trackingNumber}` : ''}
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>

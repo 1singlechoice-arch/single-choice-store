@@ -1586,9 +1586,14 @@ export default function App() {
               <span className="eyebrow-gold">ORDER HISTORY</span>
               <h1 className="editorial-heading">My Orders &amp; Dispatch</h1>
             </div>
-            <button type="button" className="btn-secondary" onClick={() => setView('shop')}>
-              Continue Shopping
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" className="btn-secondary" onClick={fetchOrders}>
+                Refresh Status
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setView('shop')}>
+                Continue Shopping
+              </button>
+            </div>
           </div>
 
           {orders.length === 0 ? (
@@ -1609,13 +1614,18 @@ export default function App() {
                         {order.createdAt ? new Date(order.createdAt).toLocaleString('en-NG') : ''}
                       </span>
                     </div>
-                    <span
-                      className={`status-pill ${
-                        order.paymentStatus === 'paid' ? 'paid' : 'pending'
-                      }`}
-                    >
-                      {order.paymentStatus === 'paid' ? 'Paid' : order.paymentStatus || 'Pending'}
-                    </span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span className="order-date" style={{ fontWeight: '600', textTransform: 'capitalize' }}>
+                        Dispatch: {order.fulfillmentStatus || 'processing'}
+                      </span>
+                      <span
+                        className={`status-pill ${
+                          order.paymentStatus === 'paid' ? 'paid' : 'pending'
+                        }`}
+                      >
+                        {order.paymentStatus === 'paid' ? 'Paid' : order.paymentStatus || 'Pending'}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="order-items-list">
@@ -1637,7 +1647,6 @@ export default function App() {
                       <span>
                         {order.delivery?.streetAddress}, {order.delivery?.area}
                         {order.delivery?.courierName ? ` • ${order.delivery.courierName}` : ''}
-                        {order.fulfillmentStatus ? ` • Status: ${order.fulfillmentStatus}` : ''}
                         {order.trackingNumber ? ` • Tracking: ${order.trackingNumber}` : ''}
                       </span>
                     </div>
